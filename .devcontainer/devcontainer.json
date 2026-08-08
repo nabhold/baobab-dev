@@ -167,9 +167,6 @@
             "source.fixAll.ruff": "explicit"
           }
         },
-        "ruff.lint.args": [
-          "--config=pyproject.toml"
-        ],
         "mypy-type-checker.args": [
           "--config-file=pyproject.toml"
         ],
@@ -181,7 +178,7 @@
           ],
           "editor.selectionHighlight": false,
           "editor.suggestSelection": "first",
-          "editor.tabCompletion": "onlySnippet",
+          "editor.tabCompletion": "onlySnippets",
           "editor.wordBasedSuggestions": "off"
         },
         "[javascript][typescript][typescriptreact][javascriptreact]": {
