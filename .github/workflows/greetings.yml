@@ -1,16 +1,73 @@
+# ==============================================================================
+# BAOBAB Enterprise Platform
+# First-Interaction Greeting
+#
+# File: .github/workflows/greetings.yml
+#
+# PURPOSE:
+# --------
+# Posts a one-time welcome comment when someone opens their FIRST issue or
+# FIRST pull request against this repository. Purely a community-friendliness
+# workflow — it has no effect on CI, builds, or the publish pipeline.
+#
+# WHY `pull_request_target` INSTEAD OF `pull_request`:
+# ------------------------------------------------------
+# A `pull_request` event triggered from a fork runs with the FORK's
+# permissions: read-only, no secrets. actions/first-interaction needs
+# `GITHUB_TOKEN` write access to post a comment, which a fork-triggered
+# `pull_request` run cannot provide. `pull_request_target` runs in the base
+# repository's context instead, giving it the write access this workflow
+# needs — this is GitHub's own documented pattern for this exact action,
+# not a local workaround.
+#
+# Note: `pull_request_target` checks out the workflow file from the BASE
+# branch, not the PR head — this workflow never checks out PR code at all,
+# so there is no code-execution risk from an untrusted fork here.
+# ==============================================================================
+
 name: Greetings
 
-on: [pull_request_target, issues]
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+# ------------------------------------------------------------------------------
+# Least Privilege Global Policy
+# Elevated to issues/pull-requests write strictly at the job level below.
+# ------------------------------------------------------------------------------
+permissions:
+  contents: read
 
 jobs:
   greeting:
+    name: Welcome First-Time Contributor
     runs-on: ubuntu-latest
+
     permissions:
       issues: write
       pull-requests: write
+
     steps:
-    - uses: actions/first-interaction@v1
-      with:
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-        issue-message: "Message that will be displayed on users' first issue"
-        pr-message: "Message that will be displayed on users' first pull request"
+      - name: Post welcome comment
+        uses: actions/first-interaction@1c4688942c71f71d4f5502a26ea67c331730fa4d # v3.1.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          issue-message: |
+            👋 Thanks for opening your first issue in **BAOBAB Enterprise Platform**!
+
+            A maintainer will take a look shortly. In the meantime, if this is a bug
+            report, a repro (image tag, architecture, and the exact command that
+            failed) will help us get to a fix faster.
+
+          pr-message: |
+            🎉 Thanks for your first pull request to **BAOBAB Enterprise Platform**!
+
+            A maintainer will review it soon. If your change touches
+            `.devcontainer/`, `config/`, or `scripts/`, note that `config/versions.lock`
+            is generated exclusively by `config/resolve.sh` — please don't hand-edit it.
+
+            See the [Contributing guide](https://nabhold.github.io/baobab-dev/project/contributing/)
+            for more.
