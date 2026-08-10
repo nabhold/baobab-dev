@@ -19,7 +19,7 @@
     // scripts/ from the build context root (see Dockerfile.txt sections
     // 2, 13), so the context must be one level up from .devcontainer/.
     "context": "..",
-    "dockerfile": ".devcontainer/docker/Dockerfile",
+    "dockerfile": "./docker/Dockerfile",
     // BUILD_DATE/VERSION/REVISION are pure metadata (see Dockerfile.txt
     // §"Build ARGs") — this build never derives them from git, since
     // devcontainer.json's "args" field is static JSON, not a shell context.

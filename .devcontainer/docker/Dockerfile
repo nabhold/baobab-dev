@@ -316,13 +316,13 @@ ARG REVISION
 LABEL org.opencontainers.image.title="baobab-dev" \
       org.opencontainers.image.description="Standard development container for the BAOBAB Enterprise Platform (Nabhold Group Africa)" \
       org.opencontainers.image.vendor="Nabhold Group Africa" \
-      org.opencontainers.image.source="https://github.com/nabhold/baobab-devcontainer" \
+      org.opencontainers.image.source="https://github.com/nabhold/baobab-dev" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$REVISION \
       org.opencontainers.image.authors="Platform Engineering <platform@nabhold.com>" \
-      org.opencontainers.image.documentation="https://github.com/nabhold/baobab-devcontainer/blob/main/README.md"
+      org.opencontainers.image.documentation="https://github.com/nabhold/baobab-dev/blob/main/README.md"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
