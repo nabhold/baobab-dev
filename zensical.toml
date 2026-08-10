@@ -37,10 +37,11 @@ edit_uri = "edit/main/docs/"
 
 nav = [
   { "Home" = "index.md" },
-  { "Introduction" = "introduction/index.md" },
-  { "Overview" = "introduction/overview.md" },
-  { "Key Features" = "introduction/key-features.md" },
-  { "Supported Platforms" = "introduction/supported-platforms.md" },
+  { "Introduction" = [
+    "introduction/overview.md",
+     "introduction/key-features.md", 
+     "introduction/supported-platforms.md" 
+    ]},
   { "Usage" = "usage/index.md" },
   { "Architecture" = "architecture/index.md" },
   { "Reference" = "reference/index.md" },
