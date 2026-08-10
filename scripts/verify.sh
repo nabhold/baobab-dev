@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# File: scripts/verify.sh (installed as: baobab-verify)
+# scripts/verify.sh (installed as: baobab-verify)
 #
 # Verifies that the BAOBAB development environment is healthy.
 #
@@ -319,7 +319,7 @@ check_required "fd" fd
 check_required "bat" bat
 check_required "eza" eza
 check_required "fzf" fzf
-check_optional "tmux" tmux
+check_optional "tmux" tmux "tmux -V"
 check_required "Task" task "task --version"
 check_required "yq" yq "yq --version"
 # cosign version's actual output leads with an ASCII-art banner before the
