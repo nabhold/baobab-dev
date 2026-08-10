@@ -1,5 +1,5 @@
 # ==============================================================================
-# Baobab Enterprise Platform
+# BAOBAB Enterprise Platform
 # Container Image Publish, Attestation & Security Pipeline
 #
 # File: .github/workflows/publish.yml
@@ -22,6 +22,15 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * Replaced aquasecurity/trivy-action with a direct checksummed Trivy
+#   binary install + run. trivy-action is a composite action that calls
+#   aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 internally, both
+#   pinned by tag in trivy-action's own source — outside our control, and
+#   rejected outright by this org's "require actions pinned to a
+#   full-length commit SHA" policy, which is enforced across the entire
+#   action call graph a workflow resolves, not just this file's own direct
+#   `uses:` references. Live-confirmed via a real failed CI run. See the
+#   "Install Trivy" step for the full rationale.
 # * sanity-check: lockfile drift on a version-tag push (e.g. v1.0.0) is now a
 #   HARD FAILURE instead of an attempted auto-commit. Tags are immutable
 #   pointers to an already-reviewed commit; git-auto-commit-action pushing
@@ -40,7 +49,7 @@
 #   broken single-arch manifest.
 # ==============================================================================
 
-name: Publish Dev Container
+name: Publish BAOBAB Dev Container
 
 on:
   push:
@@ -300,17 +309,67 @@ jobs:
       # Scans the container image for OS and language library vulnerabilities.
       # Fails with exit code 1 if unpatched HIGH or CRITICAL CVEs are detected,
       # preventing vulnerable images from reaching the publish phase.
+      #
+      # Installed via a direct checksummed binary download instead of the
+      # aquasecurity/trivy-action marketplace wrapper: that action is a
+      # composite action which internally calls aquasecurity/setup-trivy@v0.2.2
+      # and actions/cache@v4, both pinned by tag in trivy-action's own
+      # source — not something our pin on trivy-action itself can fix. This
+      # org's "require actions pinned to a full-length commit SHA" policy is
+      # enforced transitively across the entire action call graph a workflow
+      # resolves, not just this file's own direct `uses:` references — live-
+      # confirmed via a real failed run: "The actions
+      # aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 are not allowed
+      # ... because all actions must be pinned to a full-length commit SHA."
+      # A plain `run:` step has no `uses:` dependency at all, so there is
+      # nothing left for that policy to reject — and it's the same
+      # checksummed-download pattern already used throughout this project
+      # (see config/resolve.sh and .devcontainer/docker/Dockerfile).
+      #
+      # SHA256 values below come from Trivy's own published checksums file
+      # (trivy_<version>_checksums.txt, attached to every release) rather
+      # than GitHub's release-asset digest API, only because that API was
+      # rate-limited at verification time — live-verified 2026-08-10 via a
+      # full download -> sha256sum -c round trip against the real asset.
+      #
+      # Trade-off, noted deliberately rather than silently dropped:
+      # trivy-action's internal use of actions/cache also cached the
+      # vulnerability database between runs. This version re-downloads it
+      # every run (Trivy's own default behavior, pulled from its OCI
+      # registry) — slower per run, but no functional or security loss,
+      # and not something we can restore without adding our own
+      # actions/cache step (deliberately left as a follow-up, not bundled
+      # into this fix).
       # ------------------------------------------------------------------------
+      - name: Install Trivy
+        if: github.event_name != 'pull_request'
+        env:
+          TRIVY_VERSION: "0.73.0"
+        run: |
+          set -euo pipefail
+          case "${{ matrix.platform }}" in
+            linux/amd64) ASSET="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"; SHA256="2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b" ;;
+            linux/arm64) ASSET="trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz"; SHA256="13833d97e8a1a5367471c372a173180157f593bece570e20d5d925fef552f5dd" ;;
+            *) echo "::error::Unsupported platform ${{ matrix.platform }} for Trivy install"; exit 1 ;;
+          esac
+
+          curl -fsSL -o "${ASSET}" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${ASSET}"
+          echo "${SHA256}  ${ASSET}" | sha256sum -c -
+          tar -xzf "${ASSET}" trivy
+          chmod +x trivy
+          sudo mv trivy /usr/local/bin/trivy
+          trivy --version
+
       - name: Scan built container with Trivy
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
+        run: |
+          trivy image \
+            --format table \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --vuln-type os,library \
+            --severity CRITICAL,HIGH \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
 
       # ------------------------------------------------------------------------
       # Container Smoke Test
