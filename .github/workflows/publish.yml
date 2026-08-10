@@ -22,6 +22,16 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * config/versions.lock is now handed off from sanity-check to build AND
+#   publish via artifact upload/download, not left to the auto-commit step
+#   alone. build's and publish's own checkouts are both pinned to
+#   github.sha (the commit that TRIGGERED this run) and can never see a
+#   commit sanity-check pushes during its own execution — so any run where
+#   the lockfile is genuinely new or changed previously failed build's
+#   Dockerfile COPY step with "config/versions.lock: not found" (confirmed
+#   via a real failed run), and only the NEXT push would happen to
+#   succeed, after the commit had already landed. See "Upload resolved
+#   lockfile" in sanity-check for the full rationale.
 # * Replaced aquasecurity/trivy-action with a direct checksummed Trivy
 #   binary install + run. trivy-action is a composite action that calls
 #   aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 internally, both
@@ -203,6 +213,35 @@ jobs:
           echo "::error:: Please execute resolve.sh locally or update via a Pull Request branch."
           exit 1
 
+      # -------------------------------------------------------------------------
+      # Hand off the freshly-resolved lockfile to the build job via artifact,
+      # not via the auto-commit above.
+      #
+      # RATIONALE: build's own checkout later in this same workflow run is
+      # pinned to github.sha — the commit that TRIGGERED this run, not any
+      # new commit sanity-check creates during its own execution. A commit
+      # pushed here can only ever be visible to a FUTURE run; it can never
+      # retroactively appear in what build's checkout of github.sha sees
+      # THIS run. Without this artifact hand-off, any run where
+      # config/versions.lock is genuinely new or changed (drift == true)
+      # fails build's Dockerfile COPY step with "config/versions.lock: not
+      # found" — confirmed via a real failed run — and only the NEXT push,
+      # after the commit had already landed from this run, would happen to
+      # succeed. Uploaded unconditionally (not gated on drift or event
+      # type): build always needs a versions.lock, including for
+      # pull_request-triggered validation builds, which never reach the
+      # auto-commit step at all.
+      # -------------------------------------------------------------------------
+      - name: Upload resolved lockfile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: resolved-lockfile
+          path: |
+            config/versions.lock
+            .python-version
+          if-no-files-found: error
+          retention-days: 1
+
   # ============================================================================
   # Job 2: Multi-Arch Container Build, Attestations & Vulnerability Scan Gate
   # PURPOSE: Builds architecture-specific images (amd64/arm64), injects SBOM and
@@ -230,6 +269,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Overwrites whatever config/versions.lock (if any) the checkout above
+      # brought in with the exact one sanity-check resolved earlier in THIS
+      # run — see "Upload resolved lockfile" in sanity-check for why this
+      # can't rely on sanity-check's auto-commit already being in this ref.
+      - name: Download resolved lockfile
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: resolved-lockfile
+          path: .
 
       - name: Setup QEMU Emulation
         uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
@@ -409,6 +458,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Same reasoning as build's identically-named step: this job's own
+      # checkout above is pinned to github.sha and cannot see whatever
+      # sanity-check committed during this same run. Needed here so the
+      # "Create GitHub Release" step's `files: config/versions.lock`
+      # attachment below actually has a file to attach.
+      - name: Download resolved lockfile
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: resolved-lockfile
+          path: .
 
       - name: Authenticate to GHCR
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
