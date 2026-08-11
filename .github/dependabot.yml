@@ -1,0 +1,28 @@
+# .github/dependabot.yml
+version: 2
+updates:
+  # Enable Dependabot updates for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/" # Scans all workflows in .github/workflows
+    schedule:
+      interval: "weekly" # Options: "daily", "weekly", or "monthly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+
+    # Optional: Group action updates into a single PR to reduce notification noise
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+    # Optional: Customize the commit message format
+    commit-message:
+      prefix: "build(deps)"
+      include: "scope"
+
+    # Optional: Open PRs with specific reviewers or labels
+    labels:
+      - "dependencies"
+      - "github-actions"
+    open-pull-requests-limit: 10
