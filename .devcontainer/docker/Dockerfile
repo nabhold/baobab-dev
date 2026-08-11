@@ -71,6 +71,19 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * Explicitly upgraded setuptools (CVE-2025-47273) and msgpack, both
+#   system-wide and inside Poetry's own isolated pipx venv — Trivy flagged
+#   both at versions well behind their fixes. Neither is caught by this
+#   project's normal version-resolution machinery: they're bundled at
+#   whatever version ensurepip froze into this CPython build, not
+#   something "latest" tracking touches.
+# * Investigated the Moby/CVE-2026-34040 finding in docker-buildx-plugin
+#   and docker-compose-plugin (both from Docker's own apt repo): confirmed
+#   via direct go.mod inspection that even the latest available upstream
+#   releases (buildx v0.36.1, compose v5.4.0) still depend on
+#   github.com/docker/docker v28.5.2+incompatible — the exact vulnerable
+#   version. Not fixable from our side until Docker's own plugins adopt
+#   the v29.3.1 line; left unresolved deliberately, not silently.
 # * Fixed the Python version-pinning conditional: the base-archive branch's
 #   `apt-cache show "python${PYTHON_MINOR}" || apt-cache show python3`
 #   check fired almost unconditionally (generic python3 exists on nearly
@@ -316,13 +329,13 @@ ARG REVISION
 LABEL org.opencontainers.image.title="baobab-dev" \
       org.opencontainers.image.description="Standard development container for the BAOBAB Enterprise Platform (Nabhold Group Africa)" \
       org.opencontainers.image.vendor="Nabhold Group Africa" \
-      org.opencontainers.image.source="https://github.com/nabhold/baobab-dev" \
+      org.opencontainers.image.source="https://github.com/nabhold/baobab-devcontainer" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.version=$VERSION \
       org.opencontainers.image.revision=$REVISION \
       org.opencontainers.image.authors="Platform Engineering <platform@nabhold.com>" \
-      org.opencontainers.image.documentation="https://github.com/nabhold/baobab-dev/blob/main/README.md"
+      org.opencontainers.image.documentation="https://github.com/nabhold/baobab-devcontainer/blob/main/README.md"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
@@ -445,6 +458,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     update-alternatives --install /usr/bin/python3 python3 "/usr/bin/python${PYTHON_MINOR}" 1 && \
     update-alternatives --install /usr/bin/python  python  /usr/bin/python3 1
 
+# Explicit setuptools/msgpack upgrade — both were found by Trivy at versions
+# well behind their fixed releases (setuptools 70.3.0 vs. fixed 78.1.1,
+# CVE-2025-47273; msgpack similarly behind). Neither is something our
+# "latest" version-resolution machinery naturally catches: setuptools ships
+# frozen inside ensurepip's bundled wheels at whatever version was baked
+# into this specific CPython build, and stays exactly that version unless
+# something explicitly upgrades it afterward — installing python3.14 does
+# not itself pull the current setuptools from PyPI.
+RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
+        "setuptools>=78.1.1" \
+        "msgpack>=1.2.1"
+
 # pipx, Poetry — installed once, globally, then made available to every
 # user via /usr/local so Codespaces prebuilds and post-create scripts share
 # a single toolchain install.
@@ -472,6 +497,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     python3 -m pip install --no-cache-dir --break-system-packages pipx && \
     python3 -m pipx ensurepath && \
     pipx install --global "poetry==${POETRY_VERSION}" && \
+    pipx runpip poetry install --no-cache-dir --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
     chmod -R a+rX /usr/local/pipx
 
 # django-tenants and the rest of the BAOBAB application dependencies are
