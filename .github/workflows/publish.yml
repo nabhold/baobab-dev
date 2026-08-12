@@ -632,4 +632,3 @@ jobs:
             echo "- ✅ **SBOM & SLSA Attestations:** Embedded directly into OCI index"
             echo "- ✅ **Keyless Cosign Signature:** Signed via GitHub Actions OIDC identity"
           } >> "$GITHUB_STEP_SUMMARY"
-          
