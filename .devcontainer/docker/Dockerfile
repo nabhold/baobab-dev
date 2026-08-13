@@ -84,6 +84,14 @@
 #   github.com/docker/docker v28.5.2+incompatible — the exact vulnerable
 #   version. Not fixable from our side until Docker's own plugins adopt
 #   the v29.3.1 line; left unresolved deliberately, not silently.
+# * npm is now explicitly self-upgraded to latest right after Node
+#   install, fixing 4 of 7 CVEs Trivy flagged in npm's own bundled
+#   node_modules (CRITICAL tar CVE-2026-59873, HIGH CVE-2026-59874, HIGH
+#   undici CVE-2026-12151, HIGH brace-expansion CVE-2026-13149) — the
+#   NodeSource-bundled npm doesn't track these independently of a full
+#   Node point-release bump. The remaining 3 (2x brace-expansion,
+#   ip-address) are unfixed even in npm's own latest release; see
+#   .trivyignore.
 # * Fixed the Python version-pinning conditional: the base-archive branch's
 #   `apt-cache show "python${PYTHON_MINOR}" || apt-cache show python3`
 #   check fired almost unconditionally (generic python3 exists on nearly
@@ -495,10 +503,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
     python3 -m pip install --no-cache-dir --break-system-packages pipx && \
-    export PATH="/usr/local/bin:${PATH}" && \
     python3 -m pipx ensurepath && \
     pipx install --global "poetry==${POETRY_VERSION}" && \
-    python3 -m pip install --no-cache-dir --break-system-packages --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
+    pipx runpip poetry install --no-cache-dir --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
     chmod -R a+rX /usr/local/pipx
 
 # django-tenants and the rest of the BAOBAB application dependencies are
@@ -526,6 +533,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # corresponding entry in versions.yaml at all (no version to pin), so
 # `@stable` is left as-is — not an oversight, there's nothing to pin it to
 # yet.
+#
+# npm is explicitly self-upgraded to latest right after install. The npm
+# build bundled inside NodeSource's Node ${NODE_MAJOR}.x tarball carries
+# its own frozen node_modules (tar, brace-expansion, ip-address, undici),
+# independent of NODE_MAJOR tracking — live-checked (2026-08-13) against
+# npm's own package-lock.json at the latest published release (12.0.2):
+# that release alone already resolves the CRITICAL tar finding (CVE-2026-
+# 59873, needs 7.5.19, npm 12.0.2 bundles exactly that) plus CVE-2026-
+# 59874 (tar) and CVE-2026-12151 (undici). Two brace-expansion CVEs and
+# one ip-address CVE remain genuinely unfixed even in npm's own latest
+# release — see .trivyignore for those, investigated the same way.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
@@ -538,6 +556,7 @@ https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
       > /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
+    npm install -g npm@latest && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
