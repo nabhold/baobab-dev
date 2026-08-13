@@ -87,3 +87,37 @@ CVE-2026-39822 exp:2026-11-10
 # do about this until they do.
 # ------------------------------------------------------------------------------
 CVE-2026-34040 exp:2026-11-10
+
+# ------------------------------------------------------------------------------
+# CVE-2026-14257, CVE-2026-69152 — brace-expansion: Denial of Service via
+# memory exhaustion / unbounded intermediate arrays
+#
+# Found in: usr/lib/node_modules/npm/node_modules/brace-expansion
+# (bundled inside npm itself)
+# Fixed in: 5.0.8+ (CVE-2026-14257), 5.0.9+ (CVE-2026-69152)
+#
+# npm is explicitly self-upgraded to latest in the Dockerfile as of this
+# date (see Dockerfile changelog), which resolves one of three
+# brace-expansion findings (CVE-2026-13149, fixed at 5.0.7) but not these
+# two. Live-checked (2026-08-13) against npm's own package-lock.json at
+# its latest published release (12.0.2 as of this date): it still bundles
+# brace-expansion 5.0.7, short of both fixes below. Not something our own
+# version pinning can reach — this is npm's own vendored dependency,
+# frozen at whatever version npm's maintainers last bumped it to.
+# ------------------------------------------------------------------------------
+CVE-2026-14257 exp:2026-11-10
+CVE-2026-69152 exp:2026-11-10
+
+# ------------------------------------------------------------------------------
+# CVE-2026-69192 — ip-address: Inconsistent IP address parsing leads to
+# Server-Side Request Forgery (SSRF)
+#
+# Found in: usr/lib/node_modules/npm/node_modules/ip-address (bundled
+# inside npm itself)
+# Fixed in: 10.3.1
+#
+# Same situation as the brace-expansion entries above: live-checked
+# (2026-08-13) against npm 12.0.2's package-lock.json, which still bundles
+# ip-address 10.2.0. Not reachable via our own version pinning.
+# ------------------------------------------------------------------------------
+CVE-2026-69192 exp:2026-11-10
