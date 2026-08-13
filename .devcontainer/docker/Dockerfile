@@ -503,9 +503,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
     python3 -m pip install --no-cache-dir --break-system-packages pipx && \
+    export PATH="/usr/local/bin:${PATH}" && \
     python3 -m pipx ensurepath && \
     pipx install --global "poetry==${POETRY_VERSION}" && \
-    pipx runpip poetry install --no-cache-dir --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
+    python3 -m pip install --no-cache-dir --break-system-packages --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
     chmod -R a+rX /usr/local/pipx
 
 # django-tenants and the rest of the BAOBAB application dependencies are
