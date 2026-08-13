@@ -11,7 +11,7 @@
 # Configures the BAOBAB Development Container documentation site.
 #
 # Documentation is authored in Markdown under the 'docs/' directory and is
-# rendered into a static website using MkDocs with the Material theme.
+# rendered into a static website using the Material theme.
 #
 # The generated site is automatically deployed to GitHub Pages through the
 # GitHub Actions workflow located at:
