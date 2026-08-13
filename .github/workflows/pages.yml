@@ -1,41 +1,31 @@
 # ==============================================================================
-# GitHub Actions Workflow
-# ==============================================================================
-# Workflow : Deploy Documentation
+# BAOBAB Development Container
+# Deploy Documentation
 #
-# Purpose
-# -------
-# Builds the BAOBAB documentation using Zensical and deploys the generated
-# static site to GitHub Pages.
+# File: .github/workflows/pages.yml
 #
-# This workflow is intentionally limited to documentation deployment and does
-# not build or publish the development container image.
+# PURPOSE:
+#   Owns everything specific to THIS repository — trigger, path filters,
+#   and deriving the pinned Python version from config/versions.yaml —
+#   then delegates the generic uv+Zensical build/deploy mechanism to
+#   nabhold/shared. See that repository's pages-zensical.yml for why
+#   Python-version derivation is deliberately kept out of the shared
+#   workflow.
 #
-# Trigger Conditions
-# ------------------
-# • Pushes to the main branch affecting documentation -> build AND deploy.
-# • Pull requests affecting documentation -> build only, for validation.
-#   Mirrors the build-on-PR / publish-on-push pattern already used by
-#   .github/workflows/publish.yml for the container image.
-# • Manual execution from the GitHub Actions UI -> build AND deploy.
+# TWO-JOB SHAPE:
+#   resolve-python-version runs first and calls shared's generic
+#   derive-value-from-yaml composite action against THIS repo's
+#   config/versions.yaml — the same targeted extraction the old inline
+#   yq step did, now centrally maintained. Its output feeds the `docs`
+#   job, a single `uses:` call into shared's pages-zensical.yml, which
+#   expands into that workflow's own build -> deploy job graph.
 #
-# Documentation Source
-# --------------------
-# docs/
-#
-# Output
-# ------
-# GitHub Pages
-#
-# CHANGE LOG (this file, most recent first)
+# CHANGE LOG (most recent first)
 # ------------------------------------------------------------------------------
-# * All five actions used in this file were unpinned (floating major-version
-#   tags only: @v5, @v6, @v4). Pinned to full 40-character commit SHAs,
-#   live-verified against each upstream repository (2026-08-06), to satisfy
-#   the org-wide "Require actions to be pinned to a full-length commit SHA"
-#   policy and bring this file in line with publish.yml/update-lockfile.yml,
-#   where 9 of 11 existing pins were separately found to be incorrect and
-#   have already been corrected.
+# * Refactored onto nabhold/shared's pages-zensical.yml reusable workflow.
+#   Build mechanics (checkout, uv, zensical build --clean, artifact
+#   upload/deploy) now live centrally; only the parts genuinely specific
+#   to this repository remain here.
 # ==============================================================================
 
 name: Deploy Documentation
@@ -44,25 +34,16 @@ on:
   push:
     branches:
       - main
-
     paths:
-      # Documentation
       - "docs/**"
-
-      # Site configuration
       - "zensical.toml"
-
-      # Python dependencies
       - "pyproject.toml"
       - "uv.lock"
-
-      # Workflow updates
       - ".github/workflows/pages.yml"
 
   pull_request:
     branches:
       - main
-
     paths:
       - "docs/**"
       - "zensical.toml"
@@ -72,160 +53,48 @@ on:
 
   workflow_dispatch:
 
-# ------------------------------------------------------------------------------
-# Required permissions
-#
-# Minimal by default (contents: read only). The elevated pages/id-token
-# permissions needed to actually publish are granted only on the `deploy`
-# job below, not workflow-wide — a pull_request build never needs them, so
-# it never has them.
-# ------------------------------------------------------------------------------
 permissions:
   contents: read
 
-# ------------------------------------------------------------------------------
-# Prevent multiple documentation deployments running simultaneously.
-#
-# Scoped per-ref rather than a single shared key: a pull_request build and a
-# main-branch deploy must never be able to cancel one another. Concurrent
-# pushes to the same ref (e.g. two rapid pushes to main, or repeated pushes
-# to the same PR branch) still cancel their own earlier, now-stale run.
-# ------------------------------------------------------------------------------
 concurrency:
   group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
 
-  # ------------------------------------------------------------------------
-  # Build job
-  #
-  # Runs for every trigger (push, pull_request, workflow_dispatch). Only
-  # builds and uploads the Pages artifact — never deploys. Needs no
-  # permissions beyond the workflow-wide default (contents: read).
-  # ------------------------------------------------------------------------
-  build:
-    name: Build Documentation
-
-    runs-on: ubuntu-latest
-
+  # ----------------------------------------------------------------------------
+  # Repo-specific: derive the pinned Python version from THIS repo's
+  # config/versions.yaml, via shared's generic yq-extraction composite
+  # action — the one piece of the old inline implementation that could not
+  # move into the shared reusable workflow itself.
+  # ----------------------------------------------------------------------------
+  resolve-python-version:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.value }}
     steps:
-
-      # ------------------------------------------------------------------------
-      # Checkout repository
-      #
-      # fetch-depth: 0 (full history) is required by the
-      # mkdocs-git-revision-date-localized-plugin to compute accurate
-      # per-page "last updated" dates. Without it, every page silently
-      # falls back to the build date instead (fallback_to_build_date: true
-      # in mkdocs.yml prevents a hard failure, but every page would show
-      # today's date rather than its real last-modified date).
-      # ------------------------------------------------------------------------
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: resolve
+        uses: nabhold/shared/.github/actions/derive-value-from-yaml@v1
         with:
-          fetch-depth: 0
+          manifest-path: config/versions.yaml
+          query: ".languages.python.version"
 
-      # ------------------------------------------------------------------------
-      # Derive .python-version from config/versions.yaml
-      #
-      # config/versions.yaml is the single source of truth for the Python
-      # version this whole project is pinned to (the same version the
-      # container itself ships). This workflow doesn't need the rest of
-      # what config/resolve.sh resolves (Flutter, GitHub CLI tool releases,
-      # etc.) — none of that affects a documentation build, and pulling in
-      # resolve.sh's other network calls here would only add unrelated
-      # ways for this workflow to fail. This step reads just the one value
-      # it actually needs directly, so uv pins the exact same Python
-      # version a local contributor running config/resolve.sh would get.
-      # ------------------------------------------------------------------------
-      - name: Derive .python-version from config/versions.yaml
-        run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          PYTHON_VERSION=$(yq -r '.languages.python.version' config/versions.yaml)
-          echo "${PYTHON_VERSION%.*}" > .python-version
-          cat .python-version
-
-      # ------------------------------------------------------------------------
-      # Install uv
-      #
-      # No separate actions/setup-python step: uv provisions the exact
-      # Python version required by pyproject.toml's requires-python /
-      # .python-version itself, so there's nothing to keep in sync by hand
-      # here and no risk of the two drifting apart.
-      #
-      # enable-cache: true actually turns on uv's GitHub Actions cache
-      # integration — this is opt-in, not automatic, despite what this
-      # step used to claim in a comment here.
-      # ------------------------------------------------------------------------
-      - name: Install uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          enable-cache: true
-
-      # ------------------------------------------------------------------------
-      # Install project dependencies (docs group only)
-      # ------------------------------------------------------------------------
-      - name: Synchronize project dependencies
-        run: |
-          uv sync --locked --group docs
-
-      # ------------------------------------------------------------------------
-      # Build documentation
-      # ------------------------------------------------------------------------
-      - name: Build documentation
-        run: |
-          uv run zensical build --clean
-
-      # ------------------------------------------------------------------------
-      # Upload generated static site
-      #
-      # Uploaded on every trigger, including pull_request — this only
-      # packages the artifact for the deploy job (or for manual download/
-      # preview) and does not publish anything on its own.
-      # ------------------------------------------------------------------------
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: site
-
-  # ------------------------------------------------------------------------
-  # Deploy job
-  #
-  # Only runs for pushes to main and manual dispatch — never for
-  # pull_request builds. This is the only job in the workflow granted the
-  # elevated pages/id-token permissions actual publishing requires.
-  # ------------------------------------------------------------------------
-  deploy:
-    name: Deploy to GitHub Pages
-
-    needs: build
-
-    if: github.event_name != 'pull_request'
-
-    runs-on: ubuntu-latest
-
+  # ----------------------------------------------------------------------------
+  # Generic: build + deploy via nabhold/shared's Zensical pipeline. This one
+  # `uses:` entry expands to that workflow's full build -> deploy job graph;
+  # the permissions below are the ceiling for BOTH jobs, not just this call.
+  # ----------------------------------------------------------------------------
+  docs:
+    needs: resolve-python-version
     permissions:
+      contents: read
       pages: write
       id-token: write
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-
-    steps:
-
-      # ------------------------------------------------------------------------
-      # Configure GitHub Pages
-      # ------------------------------------------------------------------------
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-
-      # ------------------------------------------------------------------------
-      # Deploy
-      # ------------------------------------------------------------------------
-      - name: Deploy documentation
-        id: deploy
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+    uses: nabhold/shared/.github/workflows/pages-zensical.yml@v1
+    with:
+      python-version: ${{ needs.resolve-python-version.outputs.version }}
