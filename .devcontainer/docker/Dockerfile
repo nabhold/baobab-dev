@@ -349,7 +349,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     LC_ALL=en_US.UTF-8 \
-    TZ=UTC
+    TZ=UTC \
+    PIP_NO_CACHE_DIR=1
+
+# PIP_NO_CACHE_DIR is set here — before section 3 (Python toolchain) and
+# section 4's pipx/Poetry install even start — deliberately, not in
+# section 10's later ENV block. ENV only affects layers that come AFTER
+# it in the Dockerfile; the section 3 setuptools/msgpack upgrade and the
+# `pipx install poetry` step both run well before section 10, so setting
+# this there would have had zero effect on either of them. Trivy's
+# aggregate scan was still reporting the pre-fix setuptools/msgpack
+# versions despite the explicit `pip install --upgrade` in section 3
+# because pip's own HTTP cache (unrelated to Docker's build-layer cache)
+# had already stored the older wheel from before `--no-cache-dir` was
+# added to that line — and a cache hit short-circuits the "download the
+# newer wheel" step entirely, regardless of what --upgrade requests.
+# Every pip invocation in this stage now skips that cache outright, so
+# there is no stale wheel left to be picked up by any install, upgrade,
+# or future re-run of this layer.
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

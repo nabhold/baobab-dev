@@ -20,15 +20,9 @@
 # let the version bump land normally as part of config/resolve.sh's
 # normal "latest" tracking.
 #
-# The first four entries below were investigated 2026-08-10/13, in
-# .github/workflows/publish.yml's "Scan built container with Trivy" step
-# (Ubuntu 26.04 base image, amd64 and arm64, config/versions.lock as
-# resolved at that time). Additional entries carry their own investigation
-# date. All entries currently share a single exp: checkpoint rather than
-# each getting its own 90-day window from its individual investigation
-# date — this is a deliberate batch-review cadence, not an error; keep new
-# entries on the same checkpoint unless there's a specific reason to
-# diverge.
+# All four investigated 2026-08-10, in .github/workflows/publish.yml's
+# "Scan built container with Trivy" step (Ubuntu 26.04 base image, amd64
+# and arm64, config/versions.lock as resolved at that time).
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -127,28 +121,3 @@ CVE-2026-69152 exp:2026-11-10
 # ip-address 10.2.0. Not reachable via our own version pinning.
 # ------------------------------------------------------------------------------
 CVE-2026-69192 exp:2026-11-10
-
-# ------------------------------------------------------------------------------
-# CVE-2026-46600 (GHSA-gg3m-vvp2-p2c5, GO-2026-5942) — golang.org/x/net:
-# out-of-bounds read / panic parsing an invalid SVCB or HTTPS DNS RR
-#
-# Found in: usr/local/bin/yq
-# Fixed in: golang.org/x/net 0.56.0
-#
-# Same situation as the task/yq/cosign entries above: yq is an official
-# upstream GitHub release binary, compiled by its own maintainers against
-# whatever golang.org/x/net version they'd vendored at release time — not
-# something our own version-pinning can reach independently of an
-# upstream rebuild. Live-checked 2026-08-15 by inspecting go.mod directly
-# at mikefarah/yq's latest available tag (v4.53.3, identical to what we
-# already install): it declares `golang.org/x/net v0.55.0`, one minor
-# release short of the 0.56.0 fix. No newer yq release exists as of this
-# date. The affected symbols are in golang.org/x/net/dns/dnsmessage
-# (DNS SVCB/HTTPS record parsing) — yq itself has no DNS-resolution code
-# path that would invoke them, so this is a dependency-presence finding
-# rather than a reachable one, but it is left in .trivyignore rather than
-# silently dropped: Trivy's SCA scan is version-based, not reachability-
-# based, and will keep flagging it regardless of actual exploitability
-# until yq ships against a newer golang.org/x/net.
-# ------------------------------------------------------------------------------
-CVE-2026-46600 exp:2026-11-10
