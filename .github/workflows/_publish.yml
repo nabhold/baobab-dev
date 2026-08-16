@@ -19,6 +19,44 @@
 #    CRITICAL or HIGH severity CVEs are present.
 # 6. Keyless OIDC Signing: Cosign uses GitHub's short-lived OIDC identity tokens
 #    to sign images and attest supply chain provenance without static secret keys.
+#
+# CHANGE LOG (this file, most recent first)
+# ------------------------------------------------------------------------------
+# * config/versions.lock is now handed off from sanity-check to build AND
+#   publish via artifact upload/download, not left to the auto-commit step
+#   alone. build's and publish's own checkouts are both pinned to
+#   github.sha (the commit that TRIGGERED this run) and can never see a
+#   commit sanity-check pushes during its own execution — so any run where
+#   the lockfile is genuinely new or changed previously failed build's
+#   Dockerfile COPY step with "config/versions.lock: not found" (confirmed
+#   via a real failed run), and only the NEXT push would happen to
+#   succeed, after the commit had already landed. See "Upload resolved
+#   lockfile" in sanity-check for the full rationale.
+# * Replaced aquasecurity/trivy-action with a direct checksummed Trivy
+#   binary install + run. trivy-action is a composite action that calls
+#   aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 internally, both
+#   pinned by tag in trivy-action's own source — outside our control, and
+#   rejected outright by this org's "require actions pinned to a
+#   full-length commit SHA" policy, which is enforced across the entire
+#   action call graph a workflow resolves, not just this file's own direct
+#   `uses:` references. Live-confirmed via a real failed CI run. See the
+#   "Install Trivy" step for the full rationale.
+# * sanity-check: lockfile drift on a version-tag push (e.g. v1.0.0) is now a
+#   HARD FAILURE instead of an attempted auto-commit. Tags are immutable
+#   pointers to an already-reviewed commit; git-auto-commit-action pushing
+#   onto a tag ref is not a supported git operation and risks moving the
+#   release tag out from under anything already signed/attested against it.
+#   Auto-commit is retained, unchanged, for ordinary branch/PR pushes.
+# * build/publish: replaced job-level `outputs: digest-amd64/digest-arm64`
+#   with the artifact upload/download pattern (per Docker's own documented
+#   "Distribute build across multiple runners" approach). Matrix job outputs
+#   do not reliably merge per matrix leg in GitHub Actions — depending on
+#   completion order, one architecture's digest could be silently dropped at
+#   manifest-creation time. Writing each digest to a file and shipping it as
+#   a per-arch artifact removes that failure mode entirely, and the new
+#   explicit digest-count guard in "Publish multi-architecture OCI manifest"
+#   turns any future recurrence into a loud CI failure instead of a subtly
+#   broken single-arch manifest.
 # ==============================================================================
 
 name: Publish BAOBAB Dev Container
@@ -52,6 +90,14 @@ on:
         required: false
         default: ""
 
+# ------------------------------------------------------------------------------
+# Concurrency Management (Phase 2 Hygiene)
+# PURPOSE & RATIONALE:
+# - Cancels in-flight, superseded workflow runs when new commits are pushed to
+#   the same Pull Request or feature branch.
+# - Exception: Never auto-cancel builds running on 'main' or git semantic tags
+#   to guarantee production deployment trails are never interrupted midway.
+# ------------------------------------------------------------------------------
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_name != 'main' && !startsWith(github.ref, 'refs/tags/') }}
@@ -60,6 +106,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/baobab-dev
 
+# ------------------------------------------------------------------------------
+# Least Privilege Global Policy
+# RATIONALE: Protect repository state by keeping global token rights strictly read-only.
+# ------------------------------------------------------------------------------
 permissions:
   contents: read
 
@@ -67,11 +117,20 @@ jobs:
 
   # ============================================================================
   # Job 1: Pre-flight Lockfile Integrity & Auto-Sync
+  # PURPOSE: Verify that config/versions.lock matches config/versions.yaml.
+  #          Auto-commits changes back to PR/branch refs if drift is detected.
+  #          On a version-tag push, drift is a hard failure instead — see
+  #          "Fail on tag-push drift" below.
   # ============================================================================
   sanity-check:
     name: Lockfile Integrity & Auto-Sync
     runs-on: ubuntu-26.04
 
+    # Elevation RATIONALE: Auto-committing resolved lockfiles requires repository
+    # write access on ordinary branches. Tag pushes never reach the auto-commit
+    # step (see the "Fail on tag-push drift" step below), but the permission is
+    # left job-wide rather than step-scoped since GitHub Actions doesn't support
+    # per-step permission scoping.
     permissions:
       contents: write
 
@@ -104,6 +163,17 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # -------------------------------------------------------------------------
+      # Auto-commit resolved lockfile changes — BRANCHES ONLY.
+      #
+      # RATIONALE: A tag (our v*.*.* release trigger) is meant to be an
+      # immutable pointer to an already-reviewed commit. git-auto-commit-action
+      # pushing a new commit "onto" a tag ref is not a normal git operation —
+      # at best it fails outright and blocks the release tag; at worst it moves
+      # the tag, silently invalidating anything already signed/attested against
+      # the original commit. This step never runs on a tag push; see the
+      # "Fail on tag-push drift" step immediately below for that case instead.
+      # -------------------------------------------------------------------------
       - name: Auto-commit resolved lockfile changes (branches only)
         id: auto-commit
         if: steps.drift-check.outputs.drift == 'true' && !startsWith(github.ref, 'refs/tags/')
@@ -115,6 +185,18 @@ jobs:
           commit_user_name: "github-actions[bot]"
           commit_user_email: "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # -------------------------------------------------------------------------
+      # Fail on tag-push drift.
+      #
+      # RATIONALE: There is no branch to auto-commit to on a tag push, and
+      # there shouldn't be one — a release tag must be built from exactly the
+      # lockfile that was already committed and reviewed (via a normal PR, or
+      # via the update-lockfile.yml weekly drift PR). If resolve.sh produces a
+      # different versions.lock than what's checked in at this tag, that's a
+      # real discrepancy between what versions.yaml now resolves to and what
+      # this release is claiming to ship — stop and force a human to reconcile
+      # it, rather than silently shipping a mismatched lockfile.
+      # -------------------------------------------------------------------------
       - name: Fail on tag-push drift
         if: steps.drift-check.outputs.drift == 'true' && startsWith(github.ref, 'refs/tags/')
         run: |
@@ -131,6 +213,25 @@ jobs:
           echo "::error:: Please execute resolve.sh locally or update via a Pull Request branch."
           exit 1
 
+      # -------------------------------------------------------------------------
+      # Hand off the freshly-resolved lockfile to the build job via artifact,
+      # not via the auto-commit above.
+      #
+      # RATIONALE: build's own checkout later in this same workflow run is
+      # pinned to github.sha — the commit that TRIGGERED this run, not any
+      # new commit sanity-check creates during its own execution. A commit
+      # pushed here can only ever be visible to a FUTURE run; it can never
+      # retroactively appear in what build's checkout of github.sha sees
+      # THIS run. Without this artifact hand-off, any run where
+      # config/versions.lock is genuinely new or changed (drift == true)
+      # fails build's Dockerfile COPY step with "config/versions.lock: not
+      # found" — confirmed via a real failed run — and only the NEXT push,
+      # after the commit had already landed from this run, would happen to
+      # succeed. Uploaded unconditionally (not gated on drift or event
+      # type): build always needs a versions.lock, including for
+      # pull_request-triggered validation builds, which never reach the
+      # auto-commit step at all.
+      # -------------------------------------------------------------------------
       - name: Upload resolved lockfile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -143,13 +244,17 @@ jobs:
 
   # ============================================================================
   # Job 2: Multi-Arch Container Build, Attestations & Vulnerability Scan Gate
+  # PURPOSE: Builds architecture-specific images (amd64/arm64), injects SBOM and
+  #          SLSA provenance attestations, and scans layers for CVEs via Trivy.
   # ============================================================================
   build:
     name: Build & Security Scan (${{ matrix.platform }})
     needs: sanity-check
 
+    # RATIONALE: Route arm64 builds to native ARM GitHub-hosted runners for faster performance.
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
+    # Elevation RATIONALE: Pushing image layers and metadata by digest requires package write access.
     permissions:
       contents: read
       packages: write
@@ -165,6 +270,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Overwrites whatever config/versions.lock (if any) the checkout above
+      # brought in with the exact one sanity-check resolved earlier in THIS
+      # run — see "Upload resolved lockfile" in sanity-check for why this
+      # can't rely on sanity-check's auto-commit already being in this ref.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -178,7 +287,7 @@ jobs:
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       - name: Authenticate to GitHub Container Registry (GHCR)
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -191,6 +300,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
+      # ------------------------------------------------------------------------
+      # Build image with native Buildx SBOM & SLSA Provenance Attestations
+      # RATIONALE:
+      # - sbom: true generates SPDX Software Bill of Materials.
+      # - provenance: true embeds SLSA Level 3 build provenance into the image index.
+      # - push-by-digest: true pushes architecture layers without touching tags yet.
+      # ------------------------------------------------------------------------
       - name: Build container image with SBOM & SLSA Provenance
         id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -203,21 +319,32 @@ jobs:
             REVISION=${{ github.sha }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ startsWith(github.ref, 'refs/tags/') }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
           sbom: true
           provenance: true
 
+      # ------------------------------------------------------------------------
+      # Export architecture image digest to a file, then ship it as a per-arch
+      # artifact. RATIONALE: GitHub Actions matrix jobs do not reliably merge
+      # job-level `outputs:` across matrix legs — depending on completion
+      # order, one architecture's digest can be silently dropped by the time
+      # the `publish` job reads `needs.build.outputs.*`. Writing the digest to
+      # a file and uploading it as an artifact (Docker's own documented
+      # "Distribute build across multiple runners" pattern) removes that
+      # failure mode: each leg's digest lands as its own independently
+      # retrievable artifact, with no shared mutable state between legs.
+      # ------------------------------------------------------------------------
       - name: Export architecture image digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         run: |
           mkdir -p "${{ runner.temp }}/digests"
           digest="${{ steps.build.outputs.digest }}"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
@@ -225,8 +352,46 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # ------------------------------------------------------------------------
+      # Security Vulnerability Gate (Trivy)
+      # PURPOSE & RATIONALE:
+      # Scans the container image for OS and language library vulnerabilities.
+      # Fails with exit code 1 if unpatched HIGH or CRITICAL CVEs are detected,
+      # preventing vulnerable images from reaching the publish phase.
+      #
+      # Installed via a direct checksummed binary download instead of the
+      # aquasecurity/trivy-action marketplace wrapper: that action is a
+      # composite action which internally calls aquasecurity/setup-trivy@v0.2.2
+      # and actions/cache@v4, both pinned by tag in trivy-action's own
+      # source — not something our pin on trivy-action itself can fix. This
+      # org's "require actions pinned to a full-length commit SHA" policy is
+      # enforced transitively across the entire action call graph a workflow
+      # resolves, not just this file's own direct `uses:` references — live-
+      # confirmed via a real failed run: "The actions
+      # aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 are not allowed
+      # ... because all actions must be pinned to a full-length commit SHA."
+      # A plain `run:` step has no `uses:` dependency at all, so there is
+      # nothing left for that policy to reject — and it's the same
+      # checksummed-download pattern already used throughout this project
+      # (see config/resolve.sh and .devcontainer/docker/Dockerfile).
+      #
+      # SHA256 values below come from Trivy's own published checksums file
+      # (trivy_<version>_checksums.txt, attached to every release) rather
+      # than GitHub's release-asset digest API, only because that API was
+      # rate-limited at verification time — live-verified 2026-08-10 via a
+      # full download -> sha256sum -c round trip against the real asset.
+      #
+      # Trade-off, noted deliberately rather than silently dropped:
+      # trivy-action's internal use of actions/cache also cached the
+      # vulnerability database between runs. This version re-downloads it
+      # every run (Trivy's own default behavior, pulled from its OCI
+      # registry) — slower per run, but no functional or security loss,
+      # and not something we can restore without adding our own
+      # actions/cache step (deliberately left as a follow-up, not bundled
+      # into this fix).
+      # ------------------------------------------------------------------------
       - name: Install Trivy
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         env:
           TRIVY_VERSION: "0.73.0"
         run: |
@@ -245,21 +410,25 @@ jobs:
           trivy --version
 
       - name: Scan built container with Trivy
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name != 'pull_request'
         run: |
           trivy image \
             --platform "${{ matrix.platform }}" \
-            --scanners vuln \
-            --pkg-types os,library \
-            --severity CRITICAL,HIGH \
+            --format table \
             --exit-code 1 \
             --ignore-unfixed \
+            --pkg-types os,library \
+            --scanners vuln \
             --skip-version-check \
-            --format table \
+            --severity CRITICAL,HIGH \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
 
+      # ------------------------------------------------------------------------
+      # Container Smoke Test
+      # RATIONALE: Verify basic container runtime health before publishing release tags.
+      # ------------------------------------------------------------------------
       - name: Execute container smoke test
-        if: matrix.platform == 'linux/amd64' && startsWith(github.ref, 'refs/tags/')
+        if: matrix.platform == 'linux/amd64' && github.event_name != 'pull_request'
         run: |
           docker run --rm \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
@@ -267,14 +436,23 @@ jobs:
 
   # ============================================================================
   # Job 3: Manifest Creation, OIDC Cosign Signing & Release Attestation
+  # PURPOSE: Merges individual architecture images into a unified multi-arch OCI
+  #          Index manifest, applies keyless Cosign signatures via OIDC, and creates
+  #          a GitHub Release.
   # ============================================================================
   publish:
     name: Publish Multi-Arch Manifest & Cosign Sign
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name != 'pull_request'
 
     runs-on: ubuntu-24.04
 
+    # --------------------------------------------------------------------------
+    # Permission Elevation RATIONALE:
+    # - contents: write -> Required to create GitHub Releases and upload release notes.
+    # - packages: write -> Required to publish multi-arch OCI index manifests to GHCR.
+    # - id-token: write -> CRITICAL for keyless Cosign signing using GitHub OIDC tokens.
+    # --------------------------------------------------------------------------
     permissions:
       contents: write
       packages: write
@@ -284,6 +462,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Same reasoning as build's identically-named step: this job's own
+      # checkout above is pinned to github.sha and cannot see whatever
+      # sanity-check committed during this same run. Needed here so the
+      # "Create GitHub Release" step's `files: config/versions.lock`
+      # attachment below actually has a file to attach.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -306,8 +489,18 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref, '-') && startsWith(github.ref, 'refs/tags/v') }}
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
 
+      # ------------------------------------------------------------------------
+      # Download per-architecture digests exported by the build job.
+      # merge-multiple: true flattens both `digests-amd64/` and `digests-arm64/`
+      # artifact contents into a single directory, so every filename in
+      # ${{ runner.temp }}/digests is exactly one architecture's raw sha256
+      # (the filename itself IS the digest — see "Export architecture image
+      # digest" in the build job).
+      # ------------------------------------------------------------------------
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -315,6 +508,9 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
+      # ------------------------------------------------------------------------
+      # Merge Architecture Digests into Unified OCI Index Manifest
+      # ------------------------------------------------------------------------
       - name: Publish multi-architecture OCI manifest
         id: create-manifest
         env:
@@ -334,20 +530,32 @@ jobs:
             DIGEST_ARGS+=("${IMG}@sha256:$(basename "$f")")
           done
 
+          # Guard against a silently incomplete manifest: fail loudly rather
+          # than publishing a "multi-arch" image that only actually supports
+          # one architecture.
           if [[ ${#DIGEST_ARGS[@]} -lt 2 ]]; then
             echo "::error:: Expected 2 architecture digests (amd64 + arm64), found ${#DIGEST_ARGS[@]}."
             echo "::error:: Check the 'build' job's per-platform 'Upload digest' steps."
             exit 1
           fi
 
+          # Combine amd64 and arm64 digest layers into a single tag
           docker buildx imagetools create \
             "${TAG_ARGS[@]}" \
             "${DIGEST_ARGS[@]}"
 
+          # Retrieve final OCI index manifest digest for cryptographic signing
           FIRST_TAG=$(echo "${TAGS}" | head -n1)
           DIGEST=$(docker buildx imagetools inspect "${FIRST_TAG}" --format '{{.Manifest.Digest}}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
+      # ------------------------------------------------------------------------
+      # Keyless OIDC Cosign Infrastructure
+      # PURPOSE & RATIONALE:
+      # Installs Cosign and generates cryptographically signed signatures and
+      # supply chain attestations attached directly to the GHCR manifest digest.
+      # Eliminates long-lived static private keys in favor of short-lived OIDC tokens.
+      # ------------------------------------------------------------------------
       - name: Install Cosign CLI tool
         uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e # v3.8.0
 
@@ -373,6 +581,9 @@ jobs:
             -a "ref=${{ github.ref }}" \
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
+      # ------------------------------------------------------------------------
+      # Create GitHub Release with Verification Instructions
+      # ------------------------------------------------------------------------
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
@@ -403,6 +614,9 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
             ```
 
+      # ------------------------------------------------------------------------
+      # Step Summary Output
+      # ------------------------------------------------------------------------
       - name: Output Workflow Step Summary
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
@@ -420,3 +634,4 @@ jobs:
             echo "- ✅ **SBOM & SLSA Attestations:** Embedded directly into OCI index"
             echo "- ✅ **Keyless Cosign Signature:** Signed via GitHub Actions OIDC identity"
           } >> "$GITHUB_STEP_SUMMARY"
+           
