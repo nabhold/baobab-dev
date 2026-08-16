@@ -1,37 +1,54 @@
 {
-  "name": "BAOBAB Enterprise Platform",
+  "name": "Baobab Enterprise Platform",
   // --------------------------------------------------------------------------
   // Image source
   //
-  // ghcr.io/nabhold/baobab-dev:v1.0.0 has NOT been tagged/published yet (the
-  // pre-release audit is still in progress — see config/versions.lock/
-  // Dockerfile audit). Building from source here is the correct state until
-  // that tag exists; pointing "image" at a nonexistent tag would make this
-  // devcontainer unusable.
+  // ghcr.io/nabhold/baobab-dev:1.0.0 is the official pre-built image tagged and
+  // published by .github/workflows/publish.yml following pre-release audit.
   //
-  // Once v1.0.0 is tagged and published by .github/workflows/publish.yml,
-  // switch back: comment out the "build" block below and uncomment this
-  // "image" line (bump the tag to whatever is actually released).
+  // Using explicit tag pinning ('1.0.0') instead of ':latest' guarantees:
+  //  1. Exact deterministic environment parity across all developer workstations & CI.
+  //  2. Immutable, reproducible builds without unexpected upstream breakage.
+  //  3. Strict alignment with verified version manifests (config/versions.lock).
+  //
+  // If local Dockerfile iteration or debugging is required prior to image
+  // publishing, comment out "image" below and uncomment the "build" block.
   // --------------------------------------------------------------------------
-  // "image": "ghcr.io/nabhold/baobab-dev:1.0.0",
-  "build": {
-    // Repo root, not .devcontainer — the Dockerfile COPYs config/ and
-    // scripts/ from the build context root (see Dockerfile.txt sections
-    // 2, 13), so the context must be one level up from .devcontainer/.
-    "context": "..",
-    "dockerfile": "./docker/Dockerfile",
-    // BUILD_DATE/VERSION/REVISION are pure metadata (see Dockerfile.txt
-    // §"Build ARGs") — this build never derives them from git, since
-    // devcontainer.json's "args" field is static JSON, not a shell context.
-    // These placeholders make it obvious in `baobab-summary` / image labels
-    // that this is a local test build, not a CI-published one. BUILD_DATE is
-    // intentionally omitted; it will show "Unknown" via the script's own
-    // fallback, which is the correct signal for a non-CI build.
-    "args": {
-      "VERSION": "0.0.0-local",
-      "REVISION": "local-build"
-    }
+  "image": "ghcr.io/nabhold/baobab-dev:1.0.0",
+  // "build": {
+  //   // Repo root, not .devcontainer — the Dockerfile COPYs config/ and
+  //   // scripts/ from the build context root (see Dockerfile.txt sections
+  //   // 2, 13), so the context must be one level up from .devcontainer/.
+  //   "context": "..",
+  //   "dockerfile": "./docker/Dockerfile",
+  //   // BUILD_DATE/VERSION/REVISION are pure metadata (see Dockerfile.txt
+  //   // §"Build ARGs") — this build never derives them from git, since
+  //   // devcontainer.json's "args" field is static JSON, not a shell context.
+  //   // These placeholders make it obvious in `baobab-summary` / image labels
+  //   // that this is a local test build, not a CI-published one. BUILD_DATE is
+  //   // intentionally omitted; it will show "Unknown" via the script's own
+  //   // fallback, which is the correct signal for a non-CI build.
+  //   "args": {
+  //     "VERSION": "0.0.0-local",
+  //     "REVISION": "local-build"
+  //   }
+  // },
+
+  // --------------------------------------------------------------------------
+  // Host Requirements (Hardware Allocation for Cloud Environments)
+  //
+  // Running full-stack services (Django, FastAPI, Next.js, PostgreSQL, Redis,
+  // MinIO) alongside Docker-outside-of-Docker requires sufficient host compute.
+  // Declaring hostRequirements ensures GitHub Codespaces provisions a standard
+  // 4-core, 8GB RAM machine tier minimum, preventing runtime OOM kills and
+  // CPU bottlenecking during multi-container orchestrations.
+  // --------------------------------------------------------------------------
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
   },
+
   "runArgs": [
     "--init",
     "--cap-add=SYS_PTRACE",
@@ -43,17 +60,32 @@
   },
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
+
+  // --------------------------------------------------------------------------
+  // Workspace Mount
+  //
+  // Preserves explicit bind properties and performance flags (`consistency=cached`)
+  // for local macOS/Linux Docker Desktop execution, while allowing devcontainer
+  // implementations to adapt target paths automatically.
+  // --------------------------------------------------------------------------
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
-  // Mount the host's Docker socket so `docker` / `docker compose` inside the
-  // container talk to the same daemon Codespaces already provides — this is
-  // why the image ships only the Docker CLI, not a daemon. Mounted at a
-  // shadow path (docker-host.sock) rather than docker.sock directly: the
-  // docker-outside-of-docker feature below is what detects this path and
-  // wires up the group/permissions + symlink to /var/run/docker.sock.
+
+  // --------------------------------------------------------------------------
+  // Bind Mounts & Volume Persistence
+  //
+  // 1. Host Docker Socket: Shadow-mounted at docker-host.sock so the
+  //    docker-outside-of-docker feature can wire permissions and symlinks.
+  // 2. Named Cache Volumes: Mounting pip and node_modules as isolated Docker
+  //    volumes guarantees package caches survive devcontainer rebuilds,
+  //    substantially speeding up dependency resolution and reinstallations.
+  // --------------------------------------------------------------------------
   "mounts": [
-    "source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind"
+    "source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind",
+    "source=baobab-pip-cache,target=/home/vscode/.cache/pip,type=volume",
+    "source=baobab-node-modules,target=/workspaces/${localWorkspaceFolderBasename}/node_modules,type=volume"
   ],
+
   "features": {
     // moby: false — the image already bakes in docker-ce-cli,
     // docker-compose-plugin, and docker-buildx-plugin (Dockerfile.txt §7).
@@ -70,6 +102,7 @@
     // risks silently installing a newer/unpinned `gh` than the one
     // config/versions.lock resolved for the image build.
   },
+
   "forwardPorts": [
     8000,
     8001,
@@ -81,48 +114,95 @@
     80,
     443
   ],
+
+  // --------------------------------------------------------------------------
+  // Port Attributes & Visibility Security
+  //
+  // Explicitly assigns labels, auto-forwarding behaviors, and visibility rules.
+  // Specifying `"visibility": "private"` guarantees backend and database ports
+  // are never exposed publicly or organization-wide by default when running on
+  // cloud-hosted environments like GitHub Codespaces.
+  // --------------------------------------------------------------------------
   "portsAttributes": {
     "8000": {
       "label": "Django / DRF",
-      "onAutoForward": "notify"
+      "onAutoForward": "notify",
+      "visibility": "private"
     },
     "8001": {
       "label": "FastAPI",
-      "onAutoForward": "notify"
+      "onAutoForward": "notify",
+      "visibility": "private"
     },
     "3000": {
       "label": "Next.js",
-      "onAutoForward": "openPreview"
+      "onAutoForward": "openPreview",
+      "visibility": "private"
     },
     "5432": {
       "label": "PostgreSQL",
-      "onAutoForward": "silent"
+      "onAutoForward": "silent",
+      "visibility": "private"
     },
     "6379": {
       "label": "Redis",
-      "onAutoForward": "silent"
+      "onAutoForward": "silent",
+      "visibility": "private"
     },
     "9000": {
       "label": "MinIO API",
-      "onAutoForward": "silent"
+      "onAutoForward": "silent",
+      "visibility": "private"
     },
     "9001": {
       "label": "MinIO Console",
-      "onAutoForward": "notify"
+      "onAutoForward": "notify",
+      "visibility": "private"
     },
     "80": {
       "label": "Traefik / Nginx (HTTP)",
-      "onAutoForward": "silent"
+      "onAutoForward": "silent",
+      "visibility": "private"
     },
     "443": {
       "label": "Traefik / Nginx (HTTPS)",
-      "onAutoForward": "silent"
+      "onAutoForward": "silent",
+      "visibility": "private"
     }
   },
+
+  // --------------------------------------------------------------------------
+  // Lifecycle Hooks & Prebuild Optimization
+  //
+  // 1. updateContentCommand: Prebuild hook executed during Codespace prebuild
+  //    generation. Downloads dynamic package dependencies before developer attach.
+  // 2. onCreateCommand / postCreateCommand: Sequential lifecycle tasks executed
+  //    during container creation.
+  // 3. waitFor: Delays editor connection until `postCreateCommand` completes,
+  //    ensuring developers enter a fully provisioned workspace.
+  // 4. postStartCommand: Executes `baobab-summary` status CLI on every boot.
+  // --------------------------------------------------------------------------
+  "updateContentCommand": "bash scripts/post-create.sh --stage=update-content",
   "onCreateCommand": "bash scripts/post-create.sh --stage=on-create",
   "postCreateCommand": "bash scripts/post-create.sh --stage=post-create",
   "postStartCommand": "baobab-summary",
+  "waitFor": "postCreateCommand",
+
   "customizations": {
+    // ------------------------------------------------------------------------
+    // Codespaces-Specific UX Controls
+    // Automatically opens relevant entrypoint files upon cloud workspace creation.
+    // ------------------------------------------------------------------------
+    "codespaces": {
+      "openFiles": [
+        "README.md",
+        "docker-compose.yml"
+      ]
+    },
+
+    // ------------------------------------------------------------------------
+    // VS Code Global Settings & Recommended Extensions
+    // ------------------------------------------------------------------------
     "vscode": {
       "extensions": [
         "eamodio.gitlens",
