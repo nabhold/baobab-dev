@@ -395,6 +395,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata
 
+# Ubuntu 26.04's own base image ships /usr/bin/pebble (Canonical's Pebble
+# service manager, github.com/canonical/pebble) baked directly into the
+# rootfs — it is NOT an apt package we install (confirmed: `apt-cache
+# rdepends pebble` shows nothing depends on it in this image, and it
+# doesn't appear in `dpkg -l` either; Canonical ships it as a non-dpkg-
+# tracked file as part of the base layer itself, for use as PID 1 in their
+# own "rock"/Chisel-based container images). We don't use it — this
+# devcontainer's own CMD is `sleep infinity`, nothing in scripts/ or this
+# Dockerfile references pebble as a process supervisor — so Trivy flagging
+# Go-stdlib CVEs against it is pure dead weight with no code path we ever
+# execute. Removing the binary outright eliminates that entire finding
+# category rather than needing a per-CVE .trivyignore entry for a binary
+# we never run; other projects hitting the same Ubuntu 26.04 base-image
+# behavior have landed on the identical fix.
+RUN rm -f /usr/bin/pebble && rm -rf /var/lib/pebble
+
 # -----------------------------------------------------------------------------
 # 2. BAOBAB runtime configuration layout
 #
@@ -483,15 +499,38 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     update-alternatives --install /usr/bin/python3 python3 "/usr/bin/python${PYTHON_MINOR}" 1 && \
     update-alternatives --install /usr/bin/python  python  /usr/bin/python3 1
 
-# Explicit setuptools/msgpack upgrade — both were found by Trivy at versions
-# well behind their fixed releases (setuptools 70.3.0 vs. fixed 78.1.1,
-# CVE-2025-47273; msgpack similarly behind). Neither is something our
-# "latest" version-resolution machinery naturally catches: setuptools ships
-# frozen inside ensurepip's bundled wheels at whatever version was baked
-# into this specific CPython build, and stays exactly that version unless
-# something explicitly upgrades it afterward — installing python3.14 does
-# not itself pull the current setuptools from PyPI.
-RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
+# pip self-upgrade + explicit setuptools/msgpack upgrade.
+#
+# CORRECTED DIAGNOSIS (previous comment here was wrong — left this note so
+# the mistake isn't silently repeated): the setuptools 70.3.0 / msgpack
+# 1.1.2 Trivy findings are NOT top-level installed packages that any
+# `pip install --upgrade setuptools msgpack` command can reach. They are
+# pip's OWN internally vendored copies (pip/_vendor/setuptools,
+# pip/_vendor/msgpack) — bundled source inside pip's own package tree,
+# completely separate from whatever top-level `setuptools`/`msgpack`
+# distributions pip itself manages in site-packages. No amount of
+# --upgrade or --no-cache-dir on those two package names touches pip's
+# own vendored copies; PIP_NO_CACHE_DIR (see the top-level ENV block) was
+# solving a real but different problem (stale wheel cache reuse), not
+# this one.
+#
+# Live-verified against pip's actual vendor.txt (2026-08-15):
+#   - msgpack: pip 25.3 through 26.0.1 vendor exactly 1.1.2 (the version
+#     Trivy found). pip's current latest release (26.2.1) already vendors
+#     the fixed 1.2.1 — so this IS fixable, by making sure the pip that
+#     ends up installed here is genuinely the latest, not whatever
+#     get-pip.py happened to resolve at some earlier point. Explicit
+#     `pip install --upgrade pip` below addresses this directly.
+#   - setuptools: pip has vendored exactly 70.3.0 in EVERY release
+#     checked from 25.0 through the current latest (26.2.1/main) — this
+#     is not fixable by upgrading pip, because pip's own maintainers have
+#     not bumped their vendored setuptools past 70.3.0 in any release
+#     yet. This is the same category of "genuinely unfixable from our
+#     side, confirmed against real upstream source" as the task/yq/cosign
+#     Go-stdlib entries already in .trivyignore — see CVE-2025-47273
+#     there.
+RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade pip && \
+    python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
         "setuptools>=78.1.1" \
         "msgpack>=1.2.1"
 

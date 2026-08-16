@@ -152,3 +152,71 @@ CVE-2026-69192 exp:2026-11-10
 # until yq ships against a newer golang.org/x/net.
 # ------------------------------------------------------------------------------
 CVE-2026-46600 exp:2026-11-10
+
+# ------------------------------------------------------------------------------
+# CVE-2025-47273 — setuptools: path traversal in PackageIndex
+#
+# Found in: pip's own vendored copy (pip/_vendor/setuptools), NOT the
+# top-level `setuptools` distribution — a `pip install --upgrade
+# setuptools` in the Dockerfile does not reach this at all, since it's
+# bundled source inside pip's own package rather than a package pip's own
+# dependency resolver manages for itself.
+#
+# Fixed in: setuptools 78.1.1. Live-checked 2026-08-15 against pip's own
+# vendor.txt across every release from 25.0 through the current latest
+# (26.2.1) and the main branch: all of them vendor exactly 70.3.0. This
+# is not something any pip upgrade in our own Dockerfile can fix — it
+# requires pip's own upstream maintainers to bump their vendored copy,
+# which has not happened in any release yet. Same category as the
+# task/yq/cosign Go-stdlib entries above: a dependency frozen inside a
+# third-party redistributed artifact, confirmed unfixable from our side
+# against the actual current upstream source, not assumed.
+# ------------------------------------------------------------------------------
+CVE-2025-47273 exp:2026-11-10
+
+# ==============================================================================
+# 2026-08-15 batch — Go 1.26.6 / 1.25.13 stdlib CVEs
+#
+# DIFFERENT SITUATION from every entry above, and deliberately given a
+# SHORTER exp: (2026-08-29, ~2 weeks) instead of the standing 2026-11-10
+# checkpoint. Every entry above is "stuck" — investigated and confirmed
+# there is genuinely nothing to upgrade to, for months at a stretch
+# (pip's own vendored setuptools hasn't moved across dozens of pip
+# releases; Moby's docker.io dependency is architecturally stuck until
+# Docker's own plugins move off v28). This batch is the opposite: Go
+# 1.26.6 and 1.25.13, released 2026-08-13 (two days before this
+# investigation), fixed all seven CVEs below in the standard library
+# itself. The fix EXISTS. What doesn't exist yet is a new release of any
+# of the tools below built against the patched toolchain — live-checked
+# every one's actual latest release against that 2026-08-13 date:
+#
+#   task    v3.52.0  released 2026-07-02  (yq   v4.53.3  released 2026-06-06)
+#   gh      v2.97.0  released 2026-07-31  (cosign v3.1.3 released 2026-08-06)
+#   buildx  v0.36.1  released 2026-08-04  (compose v5.4.0 released 2026-08-03)
+#   docker/cli latest tag v29.7.2 (via git ls-remote; no release predates the patch either)
+#
+# Every single one predates 2026-08-13 — none of them COULD contain the
+# fix yet, this is not a gap in our own checking. This is expected to
+# resolve itself via ordinary upstream point releases within days to a
+# couple of weeks, well before the standing Nov checkpoint, so a shorter
+# window is the honest one: re-run this scan close to 2026-08-29, and
+# drop whichever of these seven have since been picked up by a fresh
+# task/yq/gh/cosign/buildx/compose/docker-cli release (config/resolve.sh's
+# own "latest" tracking should pull those in automatically on the next
+# lockfile update, no Dockerfile change needed for that part).
+#
+# Found in: usr/bin/docker, usr/libexec/docker/cli-plugins/docker-buildx,
+# usr/libexec/docker/cli-plugins/docker-compose, usr/local/bin/cosign,
+# usr/local/bin/gh, usr/local/bin/task, usr/local/bin/yq
+#
+# (usr/bin/pebble also carried these same findings — that one is handled
+# by removing the unused binary outright in the Dockerfile instead of an
+# ignore entry, since nothing in this image actually runs it.)
+# ==============================================================================
+CVE-2026-33818 exp:2026-08-29
+CVE-2026-39821 exp:2026-08-29
+CVE-2026-56853 exp:2026-08-29
+CVE-2026-56858 exp:2026-08-29
+CVE-2026-56859 exp:2026-08-29
+CVE-2026-56860 exp:2026-08-29
+CVE-2026-56862 exp:2026-08-29
