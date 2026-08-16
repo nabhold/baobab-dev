@@ -393,7 +393,7 @@ jobs:
       - name: Install Trivy
         if: github.event_name != 'pull_request'
         env:
-          TRIVY_VERSION: "0.73.0"
+          TRIVY_VERSION: "0.74.0"
         run: |
           set -euo pipefail
           case "${{ matrix.platform }}" in
@@ -417,7 +417,8 @@ jobs:
             --format table \
             --exit-code 1 \
             --ignore-unfixed \
-            --vuln-type os,library \
+            --pkg-types os,library \
+            --scanners vuln \
             --severity CRITICAL,HIGH \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
 
