@@ -419,6 +419,7 @@ jobs:
             --ignore-unfixed \
             --pkg-types os,library \
             --scanners vuln \
+            --skip-version-check \
             --severity CRITICAL,HIGH \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
 
