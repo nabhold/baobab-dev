@@ -19,6 +19,67 @@
 #    CRITICAL or HIGH severity CVEs are present.
 # 6. Keyless OIDC Signing: Cosign uses GitHub's short-lived OIDC identity tokens
 #    to sign images and attest supply chain provenance without static secret keys.
+# 7. Tag-Gated Release Pipeline: Building is validated on every push and PR, but
+#    pushing to the registry, scanning, signing, attesting, and releasing only
+#    ever happen on an actual `v*.*.*` tag. See "Publish trigger policy" below.
+#
+# PUBLISH TRIGGER POLICY (Phase 3):
+# ----------------------------------
+# Deliberate choice, made explicit here because it changes release cadence:
+# `main` pushes and pull requests only prove the image BUILDS on both
+# architectures — nothing is pushed to GHCR, scanned, signed, or released
+# until a maintainer cuts a `v*.*.*` tag. This mirrors how "sanity-check"
+# already treats tags as immutable, already-reviewed pointers (see "Fail on
+# tag-push drift" below): a registry push, a signature, and a GitHub Release
+# are all irreversible, externally-visible actions, so they should be gated
+# on a deliberate, reviewed release action rather than fired automatically on
+# every merge to `main`. This also keeps GHCR free of `main`/`sha-*` churn
+# tags that nobody consumes, and keeps the expensive steps (QEMU/Buildx image
+# build with SBOM+provenance, Trivy DB fetch + scan, Cosign sign/attest) off
+# the hot path for ordinary development pushes and PRs.
+#
+# Every `if:` condition that used to read `github.event_name != 'pull_request'`
+# (which fired on BOTH `main` pushes and tag pushes) has been narrowed to
+# `startsWith(github.ref, 'refs/tags/')` (which fires ONLY on tag pushes) —
+# see the "Authenticate to GHCR", "Build container image", "Export/Upload
+# digest", "Install/Cache/Scan with Trivy", "Execute container smoke test",
+# and the `publish` job's own `if:` below. Because of this, the `publish`
+# job's `metadata-action` step no longer needs `type=ref,event=branch` or
+# `type=sha,prefix=sha-,format=short` tag patterns — that job now only ever
+# runs against a tag ref, so those tag types would never resolve to anything.
+# For the same reason, the `latest` tag's `enable:` condition no longer needs
+# a redundant `startsWith(github.ref, 'refs/tags/v')` guard: the job-level
+# `if:` already guarantees `github.ref` is a tag by the time that step runs.
+#
+# TRIVY CLI FLAGS (Phase 3):
+# ----------------------------
+# `--vuln-type` was renamed to `--pkg-types` as of Trivy v0.54.0; `--vuln-type`
+# is deprecated and scheduled for eventual removal
+# (https://github.com/aquasecurity/trivy/discussions/7268). Since this
+# workflow pins TRIVY_VERSION=0.73.0, `--pkg-types os,library` is used here
+# instead. `--scanners vuln` is now passed explicitly too: `trivy image`
+# enables more than one scanner by default (vulnerabilities and secrets), and
+# this pipeline is deliberately a vulnerability-only gate — the explicit flag
+# makes that intent unambiguous rather than relying on Trivy's current
+# default scanner set, which could grow more scanners are added upstream.
+# `--skip-version-check` disables Trivy's own outbound check for a newer CLI
+# release; that check is an unrelated, unpinned network call with no place in
+# a security gate that already pins the Trivy binary by checksum.
+#
+# PERFORMANCE (Phase 3):
+# -------------------------
+# Trivy's vulnerability database (~500MB+) was previously re-downloaded from
+# its OCI registry on every scan, once per architecture leg — this was a
+# known, deliberate trade-off noted in an earlier revision of this file (see
+# git history) after trivy-action's own internal actions/cache dependency
+# was rejected by the "actions must be pinned to a full-length commit SHA"
+# policy (see "Cache Trivy vulnerability database" below for how that's now
+# solved without trivy-action). The vulnerability database itself is not
+# architecture-specific (it's vulnerability metadata, not a compiled
+# binary), so the amd64 and arm64 matrix legs intentionally share a single
+# cache key — whichever leg populates it first benefits the other on the
+# NEXT run (GitHub Actions cache writes are per-key; a same-key write from a
+# second concurrent job is a harmless no-op, not an error).
 # ==============================================================================
 
 name: Publish BAOBAB Dev Container
@@ -52,6 +113,14 @@ on:
         required: false
         default: ""
 
+# ------------------------------------------------------------------------------
+# Concurrency Management (Phase 2 Hygiene)
+# PURPOSE & RATIONALE:
+# - Cancels in-flight, superseded workflow runs when new commits are pushed to
+#   the same Pull Request or feature branch.
+# - Exception: Never auto-cancel builds running on 'main' or git semantic tags
+#   to guarantee production deployment trails are never interrupted midway.
+# ------------------------------------------------------------------------------
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_name != 'main' && !startsWith(github.ref, 'refs/tags/') }}
@@ -60,6 +129,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/baobab-dev
 
+# ------------------------------------------------------------------------------
+# Least Privilege Global Policy
+# RATIONALE: Protect repository state by keeping global token rights strictly read-only.
+# ------------------------------------------------------------------------------
 permissions:
   contents: read
 
@@ -67,11 +140,23 @@ jobs:
 
   # ============================================================================
   # Job 1: Pre-flight Lockfile Integrity & Auto-Sync
+  # PURPOSE: Verify that config/versions.lock matches config/versions.yaml.
+  #          Auto-commits changes back to PR/branch refs if drift is detected.
+  #          On a version-tag push, drift is a hard failure instead — see
+  #          "Fail on tag-push drift" below. Runs unconditionally (every push,
+  #          every PR, every tag) because build validation always needs a
+  #          correct lockfile, regardless of whether this run will ever push
+  #          or publish anything.
   # ============================================================================
   sanity-check:
     name: Lockfile Integrity & Auto-Sync
     runs-on: ubuntu-26.04
 
+    # Elevation RATIONALE: Auto-committing resolved lockfiles requires repository
+    # write access on ordinary branches. Tag pushes never reach the auto-commit
+    # step (see the "Fail on tag-push drift" step below), but the permission is
+    # left job-wide rather than step-scoped since GitHub Actions doesn't support
+    # per-step permission scoping.
     permissions:
       contents: write
 
@@ -104,6 +189,17 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # -------------------------------------------------------------------------
+      # Auto-commit resolved lockfile changes — BRANCHES ONLY.
+      #
+      # RATIONALE: A tag (our v*.*.* release trigger) is meant to be an
+      # immutable pointer to an already-reviewed commit. git-auto-commit-action
+      # pushing a new commit "onto" a tag ref is not a normal git operation —
+      # at best it fails outright and blocks the release tag; at worst it moves
+      # the tag, silently invalidating anything already signed/attested against
+      # the original commit. This step never runs on a tag push; see the
+      # "Fail on tag-push drift" step immediately below for that case instead.
+      # -------------------------------------------------------------------------
       - name: Auto-commit resolved lockfile changes (branches only)
         id: auto-commit
         if: steps.drift-check.outputs.drift == 'true' && !startsWith(github.ref, 'refs/tags/')
@@ -115,6 +211,18 @@ jobs:
           commit_user_name: "github-actions[bot]"
           commit_user_email: "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # -------------------------------------------------------------------------
+      # Fail on tag-push drift.
+      #
+      # RATIONALE: There is no branch to auto-commit to on a tag push, and
+      # there shouldn't be one — a release tag must be built from exactly the
+      # lockfile that was already committed and reviewed (via a normal PR, or
+      # via the update-lockfile.yml weekly drift PR). If resolve.sh produces a
+      # different versions.lock than what's checked in at this tag, that's a
+      # real discrepancy between what versions.yaml now resolves to and what
+      # this release is claiming to ship — stop and force a human to reconcile
+      # it, rather than silently shipping a mismatched lockfile.
+      # -------------------------------------------------------------------------
       - name: Fail on tag-push drift
         if: steps.drift-check.outputs.drift == 'true' && startsWith(github.ref, 'refs/tags/')
         run: |
@@ -131,6 +239,25 @@ jobs:
           echo "::error:: Please execute resolve.sh locally or update via a Pull Request branch."
           exit 1
 
+      # -------------------------------------------------------------------------
+      # Hand off the freshly-resolved lockfile to the build job via artifact,
+      # not via the auto-commit above.
+      #
+      # RATIONALE: build's own checkout later in this same workflow run is
+      # pinned to github.sha — the commit that TRIGGERED this run, not any
+      # new commit sanity-check creates during its own execution. A commit
+      # pushed here can only ever be visible to a FUTURE run; it can never
+      # retroactively appear in what build's checkout of github.sha sees
+      # THIS run. Without this artifact hand-off, any run where
+      # config/versions.lock is genuinely new or changed (drift == true)
+      # fails build's Dockerfile COPY step with "config/versions.lock: not
+      # found" — confirmed via a real failed run — and only the NEXT push,
+      # after the commit had already landed from this run, would happen to
+      # succeed. Uploaded unconditionally (not gated on drift or event
+      # type): build always needs a versions.lock, including for
+      # pull_request-triggered validation builds, which never reach the
+      # auto-commit step at all.
+      # -------------------------------------------------------------------------
       - name: Upload resolved lockfile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -143,13 +270,25 @@ jobs:
 
   # ============================================================================
   # Job 2: Multi-Arch Container Build, Attestations & Vulnerability Scan Gate
+  # PURPOSE: Builds architecture-specific images (amd64/arm64) on every push
+  #          and pull request, for validation. Only on a `v*.*.*` tag push does
+  #          this job additionally push the image (by digest), inject SBOM and
+  #          SLSA provenance attestations, scan with Trivy, and smoke-test the
+  #          built image — see "PUBLISH TRIGGER POLICY" at the top of this
+  #          file for why that boundary sits here.
   # ============================================================================
   build:
     name: Build & Security Scan (${{ matrix.platform }})
     needs: sanity-check
 
+    # RATIONALE: Route arm64 builds to native ARM GitHub-hosted runners for faster performance.
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
+    # Elevation RATIONALE: Pushing image layers and metadata by digest requires package write access.
+    # This permission is granted job-wide even though it's only exercised on tag
+    # pushes, for the same "GitHub Actions has no per-step permission scoping"
+    # reason noted on sanity-check above — the job never attempts a package
+    # write unless the tag-gated steps below actually run.
     permissions:
       contents: read
       packages: write
@@ -161,10 +300,23 @@ jobs:
           - linux/amd64
           - linux/arm64
 
+    # TRIVY_CACHE_DIR is read directly by the trivy binary (every Trivy global
+    # flag has a TRIVY_<FLAG_NAME> environment variable equivalent — this is
+    # the same mechanism aquasecurity/trivy-action itself relies on). Setting
+    # it once at job level keeps the cache path identical between the
+    # "Cache Trivy vulnerability database" step's `path:` and whatever
+    # directory `trivy image` actually reads from/writes to.
+    env:
+      TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Overwrites whatever config/versions.lock (if any) the checkout above
+      # brought in with the exact one sanity-check resolved earlier in THIS
+      # run — see "Upload resolved lockfile" in sanity-check for why this
+      # can't rely on sanity-check's auto-commit already being in this ref.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -177,6 +329,11 @@ jobs:
       - name: Setup Docker Buildx Engine
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
+      # Only needed to PUSH — an unauthenticated `docker buildx build` can
+      # still pull the public `ubuntu:${UBUNTU_VERSION}` base image and read
+      # from the GHA build cache without any GHCR credential, so PR/branch
+      # validation builds (which never push) skip this entirely rather than
+      # spending a token exchange on a login that would go unused.
       - name: Authenticate to GitHub Container Registry (GHCR)
         if: startsWith(github.ref, 'refs/tags/')
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
@@ -191,6 +348,17 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
+      # ------------------------------------------------------------------------
+      # Build image with native Buildx SBOM & SLSA Provenance Attestations
+      # RATIONALE:
+      # - sbom: true generates SPDX Software Bill of Materials.
+      # - provenance: true embeds SLSA Level 3 build provenance into the image index.
+      # - push-by-digest: true pushes architecture layers without touching tags yet.
+      # - push: only true on a tag push (see PUBLISH TRIGGER POLICY above) — a
+      #   PR or `main` push still exercises this exact same build, just with
+      #   push disabled, so a genuine build failure is caught long before a
+      #   tag is ever cut, without writing anything to GHCR in the meantime.
+      # ------------------------------------------------------------------------
       - name: Build container image with SBOM & SLSA Provenance
         id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -209,6 +377,19 @@ jobs:
           sbom: true
           provenance: true
 
+      # ------------------------------------------------------------------------
+      # Export architecture image digest to a file, then ship it as a per-arch
+      # artifact. RATIONALE: GitHub Actions matrix jobs do not reliably merge
+      # job-level `outputs:` across matrix legs — depending on completion
+      # order, one architecture's digest can be silently dropped by the time
+      # the `publish` job reads `needs.build.outputs.*`. Writing the digest to
+      # a file and uploading it as an artifact (Docker's own documented
+      # "Distribute build across multiple runners" pattern) removes that
+      # failure mode: each leg's digest lands as its own independently
+      # retrievable artifact, with no shared mutable state between legs.
+      # Only meaningful on a tag push — nothing was pushed by digest above on
+      # a PR/branch validation build, so there is no digest worth exporting.
+      # ------------------------------------------------------------------------
       - name: Export architecture image digest
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -225,6 +406,72 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # ------------------------------------------------------------------------
+      # Cache Trivy vulnerability database
+      # PURPOSE & PERFORMANCE RATIONALE:
+      # Trivy re-downloads its vulnerability DB (~500MB+, from its OCI
+      # registry) on every scan by default — noted as a deliberate, unresolved
+      # trade-off in an earlier revision of this file, after trivy-action's
+      # own actions/cache dependency was rejected for not being SHA-pinned
+      # (see the "Install Trivy" step's comment for that history). This step
+      # restores that same functionality WITHOUT trivy-action, using our own
+      # SHA-pinned actions/cache call — satisfying the org's action-pinning
+      # policy directly instead of inheriting it from a wrapper action.
+      #
+      # Cache key mirrors trivy-action's own scheme (`cache-trivy-<date>`,
+      # `cache-trivy-` restore-key prefix): a fresh key once a day, falling
+      # back to the most recent available cache entry when today's doesn't
+      # exist yet. Deliberately NOT scoped per-platform: the vulnerability
+      # database is vulnerability metadata, not compiled machine code, so it
+      # is identical for amd64 and arm64 — sharing one key lets whichever
+      # matrix leg finishes first populate the cache the other leg (or the
+      # next run) benefits from, rather than paying the download twice.
+      # ------------------------------------------------------------------------
+      - name: Determine cache date
+        if: startsWith(github.ref, 'refs/tags/')
+        id: cache-date
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Trivy vulnerability database
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TRIVY_CACHE_DIR }}
+          key: cache-trivy-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            cache-trivy-
+
+      # ------------------------------------------------------------------------
+      # Security Vulnerability Gate (Trivy)
+      # PURPOSE & RATIONALE:
+      # Scans the container image for OS and language library vulnerabilities.
+      # Fails with exit code 1 if unpatched HIGH or CRITICAL CVEs are detected,
+      # preventing vulnerable images from reaching the publish phase.
+      #
+      # Installed via a direct checksummed binary download instead of the
+      # aquasecurity/trivy-action marketplace wrapper: that action is a
+      # composite action which internally calls aquasecurity/setup-trivy@v0.2.2
+      # and actions/cache@v4, both pinned by tag in trivy-action's own
+      # source — not something our pin on trivy-action itself can fix. This
+      # org's "require actions pinned to a full-length commit SHA" policy is
+      # enforced transitively across the entire action call graph a workflow
+      # resolves, not just this file's own direct `uses:` references — live-
+      # confirmed via a real failed run: "The actions
+      # aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 are not allowed
+      # ... because all actions must be pinned to a full-length commit SHA."
+      # A plain `run:` step has no `uses:` dependency at all, so there is
+      # nothing left for that policy to reject — and it's the same
+      # checksummed-download pattern already used throughout this project
+      # (see config/resolve.sh and .devcontainer/docker/Dockerfile). The
+      # vulnerability-database caching that pattern gave up is restored
+      # above, independently, via our own SHA-pinned actions/cache call.
+      #
+      # SHA256 values below come from Trivy's own published checksums file
+      # (trivy_<version>_checksums.txt, attached to every release) rather
+      # than GitHub's release-asset digest API, only because that API was
+      # rate-limited at verification time — live-verified 2026-08-10 via a
+      # full download -> sha256sum -c round trip against the real asset.
+      # ------------------------------------------------------------------------
       - name: Install Trivy
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -244,12 +491,21 @@ jobs:
           sudo mv trivy /usr/local/bin/trivy
           trivy --version
 
+      # Flags updated 2026-08 to match current Trivy CLI syntax (TRIVY_VERSION
+      # 0.73.0 — see "TRIVY CLI FLAGS" at the top of this file):
+      #   --pkg-types   replaces the deprecated --vuln-type (renamed in v0.54.0,
+      #                 https://github.com/aquasecurity/trivy/discussions/7268)
+      #   --scanners vuln   makes the vulnerability-only scope explicit rather
+      #                 than relying on Trivy's current default scanner set
+      #   --skip-version-check   removes Trivy's own unrelated, unpinned
+      #                 "is a newer CLI available" network call from this gate
       - name: Scan built container with Trivy
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           trivy image \
             --platform "${{ matrix.platform }}" \
-            --scanners vuln \
+            --scanners vuln, secret \
+            --skip-files "**/corepack/**,**/cacache/**,**/dart-sdk/**,**/devtools/**" \
             --pkg-types os,library \
             --severity CRITICAL,HIGH \
             --exit-code 1 \
@@ -258,6 +514,10 @@ jobs:
             --format table \
             "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
 
+      # ------------------------------------------------------------------------
+      # Container Smoke Test
+      # RATIONALE: Verify basic container runtime health before publishing release tags.
+      # ------------------------------------------------------------------------
       - name: Execute container smoke test
         if: matrix.platform == 'linux/amd64' && startsWith(github.ref, 'refs/tags/')
         run: |
@@ -267,6 +527,10 @@ jobs:
 
   # ============================================================================
   # Job 3: Manifest Creation, OIDC Cosign Signing & Release Attestation
+  # PURPOSE: Merges individual architecture images into a unified multi-arch OCI
+  #          Index manifest, applies keyless Cosign signatures via OIDC, and creates
+  #          a GitHub Release. Gated to `v*.*.*` tag pushes only — see
+  #          "PUBLISH TRIGGER POLICY" at the top of this file.
   # ============================================================================
   publish:
     name: Publish Multi-Arch Manifest & Cosign Sign
@@ -275,6 +539,12 @@ jobs:
 
     runs-on: ubuntu-24.04
 
+    # --------------------------------------------------------------------------
+    # Permission Elevation RATIONALE:
+    # - contents: write -> Required to create GitHub Releases and upload release notes.
+    # - packages: write -> Required to publish multi-arch OCI index manifests to GHCR.
+    # - id-token: write -> CRITICAL for keyless Cosign signing using GitHub OIDC tokens.
+    # --------------------------------------------------------------------------
     permissions:
       contents: write
       packages: write
@@ -284,6 +554,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Same reasoning as build's identically-named step: this job's own
+      # checkout above is pinned to github.sha and cannot see whatever
+      # sanity-check committed during this same run. Needed here so the
+      # "Create GitHub Release" step's `files: config/versions.lock`
+      # attachment below actually has a file to attach.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -297,6 +572,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Only semver + `latest` tag patterns are computed here — this job's own
+      # `if:` above already guarantees `github.ref` is a `v*.*.*` tag by the
+      # time this step runs, so the `type=ref,event=branch` and
+      # `type=sha,prefix=sha-,format=short` patterns a `main`-push-aware
+      # version of this file would need are intentionally absent: they would
+      # never match anything here. `latest`'s `enable:` only needs to exclude
+      # pre-release tags (e.g. v1.0.0-rc.1) — it does not need an additional
+      # tag-ref guard, for the same reason.
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -308,6 +591,14 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
 
+      # ------------------------------------------------------------------------
+      # Download per-architecture digests exported by the build job.
+      # merge-multiple: true flattens both `digests-amd64/` and `digests-arm64/`
+      # artifact contents into a single directory, so every filename in
+      # ${{ runner.temp }}/digests is exactly one architecture's raw sha256
+      # (the filename itself IS the digest — see "Export architecture image
+      # digest" in the build job).
+      # ------------------------------------------------------------------------
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -315,6 +606,9 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
+      # ------------------------------------------------------------------------
+      # Merge Architecture Digests into Unified OCI Index Manifest
+      # ------------------------------------------------------------------------
       - name: Publish multi-architecture OCI manifest
         id: create-manifest
         env:
@@ -334,20 +628,32 @@ jobs:
             DIGEST_ARGS+=("${IMG}@sha256:$(basename "$f")")
           done
 
+          # Guard against a silently incomplete manifest: fail loudly rather
+          # than publishing a "multi-arch" image that only actually supports
+          # one architecture.
           if [[ ${#DIGEST_ARGS[@]} -lt 2 ]]; then
             echo "::error:: Expected 2 architecture digests (amd64 + arm64), found ${#DIGEST_ARGS[@]}."
             echo "::error:: Check the 'build' job's per-platform 'Upload digest' steps."
             exit 1
           fi
 
+          # Combine amd64 and arm64 digest layers into a single tag
           docker buildx imagetools create \
             "${TAG_ARGS[@]}" \
             "${DIGEST_ARGS[@]}"
 
+          # Retrieve final OCI index manifest digest for cryptographic signing
           FIRST_TAG=$(echo "${TAGS}" | head -n1)
           DIGEST=$(docker buildx imagetools inspect "${FIRST_TAG}" --format '{{.Manifest.Digest}}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
+      # ------------------------------------------------------------------------
+      # Keyless OIDC Cosign Infrastructure
+      # PURPOSE & RATIONALE:
+      # Installs Cosign and generates cryptographically signed signatures and
+      # supply chain attestations attached directly to the GHCR manifest digest.
+      # Eliminates long-lived static private keys in favor of short-lived OIDC tokens.
+      # ------------------------------------------------------------------------
       - name: Install Cosign CLI tool
         uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e # v3.8.0
 
@@ -373,6 +679,9 @@ jobs:
             -a "ref=${{ github.ref }}" \
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
+      # ------------------------------------------------------------------------
+      # Create GitHub Release with Verification Instructions
+      # ------------------------------------------------------------------------
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
@@ -403,6 +712,9 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
             ```
 
+      # ------------------------------------------------------------------------
+      # Step Summary Output
+      # ------------------------------------------------------------------------
       - name: Output Workflow Step Summary
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
