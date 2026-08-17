@@ -553,24 +553,31 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade pip 
 # treatment as ripgrep/task/gh/etc. below (Section 9), honoring its
 # `source: github` in versions.yaml instead of installing it unpinned from
 # PyPI via pipx.
-# pipx, Poetry, and isolated shared venv patching
-ENV PIPX_HOME=/usr/local/pipx \
-    PIPX_BIN_DIR=/usr/local/bin
+# PIPX_GLOBAL_HOME / PIPX_GLOBAL_BIN_DIR — NOT PIPX_HOME / PIPX_BIN_DIR.
+# `pipx install --global` (used below for Poetry) reads a completely
+# separate variable pair; confirmed against pipx 1.16.7's own source
+# (pipx/paths.py: make_global() reads PIPX_GLOBAL_HOME/PIPX_GLOBAL_BIN_DIR
+# exclusively and never falls back to PIPX_HOME/PIPX_BIN_DIR). This block
+# previously set PIPX_HOME=/usr/local/pipx, which had zero effect on
+# Poetry's actual install location — Poetry silently landed at pipx's own
+# global default, /opt/pipx (confirmed via Trivy scan output showing
+# opt/pipx/venvs/poetry/... paths, live-verified 2026-08-17). Kept at
+# /opt/pipx deliberately — pipx's own default, and where Poetry has
+# already been installing in every build to date — rather than
+# relocating it, to keep this a naming/permissions fix only, with no
+# change to where files actually land on disk.
+ENV PIPX_GLOBAL_HOME=/opt/pipx \
+    PIPX_GLOBAL_BIN_DIR=/usr/local/bin
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
     python3 -m pip install --no-cache-dir --break-system-packages pipx && \
     export PATH="/usr/local/bin:${PATH}" && \
-    python3 -m pipx ensurepath && \
+    python3 -m pipx ensurepath --global && \
     pipx install --global "poetry==${POETRY_VERSION}" && \
-    # Upgrade global site-packages
     python3 -m pip install --no-cache-dir --break-system-packages --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
-    # Upgrade pipx shared environment location to clear Trivy finding
-    if [ -f /usr/local/pipx/shared/bin/pip ]; then \
-        /usr/local/pipx/shared/bin/pip install --no-cache-dir --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1"; \
-    fi && \
-    chmod -R a+rX /usr/local/pipx
-
+    chmod -R a+rX "${PIPX_GLOBAL_HOME}"
+    
 # django-tenants and the rest of the BAOBAB application dependencies are
 # intentionally NOT baked in here — they belong to the project's own
 # pyproject.toml / poetry.lock and are installed by post-create.sh on
