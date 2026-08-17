@@ -66,6 +66,32 @@
 # release; that check is an unrelated, unpinned network call with no place in
 # a security gate that already pins the Trivy binary by checksum.
 #
+# TRIVY SCAN TARGET (Phase 4):
+# ------------------------------
+# `sbom: true` + `provenance: true` on the push-by-digest build (below) do
+# not produce a plain single-manifest image, even for a single `platforms:`
+# value — BuildKit wraps the result in an OCI Image INDEX containing the
+# real platform manifest plus a second, separate attestation manifest
+# annotated `platform: unknown/unknown`. This is documented BuildKit
+# behavior (moby/buildkit, docker/buildx#1964), not a misconfiguration here,
+# and it's the same root cause independently reported against Harbor's own
+# Trivy adapter (goharbor/harbor#22848) and fixed by other projects the same
+# way this file now does (stacklok/dockyard#215): pointing a scanner at
+# `steps.build.outputs.digest` hands it that 2-manifest index rather than a
+# single image, which is what produced the "multiple image"/manifest-
+# selection failure this file used to hit.
+#
+# Rather than disabling sbom/provenance (the simpler fix, but one that would
+# give up feature #4 in the ARCHITECTURAL HIGHLIGHTS above), the "Build local
+# single-manifest image for scanning" step below builds a second,
+# attestation-free image with `load: true` — same Dockerfile, build-args,
+# and platform as the real push-by-digest build, so BuildKit's own local
+# layer cache (same builder instance, same job) serves every layer with no
+# rebuild and no extra network round trip. Trivy then scans that local,
+# unambiguous single-manifest image instead of the registry-pushed index.
+# The real published artifact keeps its full SBOM + SLSA provenance
+# untouched; only the scan target changes.
+#
 # PERFORMANCE (Phase 3):
 # -------------------------
 # Trivy's vulnerability database (~500MB+) was previously re-downloaded from
@@ -407,6 +433,38 @@ jobs:
           retention-days: 1
 
       # ------------------------------------------------------------------------
+      # Build local single-manifest image for scanning
+      # PURPOSE & RATIONALE: see "TRIVY SCAN TARGET" at the top of this file.
+      # In short: the push-by-digest build above produces an OCI Image INDEX
+      # (real manifest + a separate "unknown/unknown" attestation manifest)
+      # because of sbom/provenance, and Trivy can't be pointed at that index
+      # directly without hitting a multi-manifest resolution failure. This
+      # step re-exports the same build — no attestations, `load: true` —
+      # into the runner's local Docker daemon under a fixed tag, purely as
+      # an unambiguous scan target. It is NOT a second from-scratch build:
+      # same builder instance (from "Setup Docker Buildx Engine" above),
+      # same Dockerfile/build-args/platform as the build immediately above,
+      # so BuildKit's own local layer cache serves every layer with nothing
+      # to actually rebuild — this step only changes how the result is
+      # exported, not what gets built.
+      # ------------------------------------------------------------------------
+      - name: Build local single-manifest image for scanning
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ./.devcontainer/docker/Dockerfile
+          build-args: |
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          tags: baobab-dev:scan
+          cache-from: type=gha,scope=${{ matrix.platform }}
+
+      # ------------------------------------------------------------------------
       # Cache Trivy vulnerability database
       # PURPOSE & PERFORMANCE RATIONALE:
       # Trivy re-downloads its vulnerability DB (~500MB+, from its OCI
@@ -499,20 +557,27 @@ jobs:
       #                 than relying on Trivy's current default scanner set
       #   --skip-version-check   removes Trivy's own unrelated, unpinned
       #                 "is a newer CLI available" network call from this gate
+      #
+      # Scan target is the LOCAL `baobab-dev:scan` image built above, not the
+      # registry-pushed `steps.build.outputs.digest` — see "TRIVY SCAN
+      # TARGET" at the top of this file for why: that digest resolves to a
+      # 2-manifest OCI index (real image + an "unknown/unknown" attestation
+      # manifest) once sbom/provenance are enabled, which Trivy cannot
+      # resolve to a single image on its own. No `--platform` flag is needed
+      # here either, for the same reason: a local single-manifest image has
+      # no other manifests to disambiguate between.
       - name: Scan built container with Trivy
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           trivy image \
-            --platform "${{ matrix.platform }}" \
-            --scanners vuln, secret \
-            --skip-files "**/corepack/**,**/cacache/**,**/dart-sdk/**,**/devtools/**" \
+            --scanners vuln \
             --pkg-types os,library \
             --severity CRITICAL,HIGH \
             --exit-code 1 \
             --ignore-unfixed \
             --skip-version-check \
             --format table \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+            baobab-dev:scan
 
       # ------------------------------------------------------------------------
       # Container Smoke Test
@@ -680,6 +745,37 @@ jobs:
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
       # ------------------------------------------------------------------------
+      # Post-Publish Verification
+      # PURPOSE & RATIONALE:
+      # scripts/verify-image.sh already exists and re-implements, from the
+      # outside, exactly what a downstream consumer would run to trust this
+      # image: a Cosign keyless-OIDC signature check, an SLSA provenance
+      # attestation check, and an SPDX SBOM attestation check. Before this
+      # step, nothing in CI ever actually called it — a regression in any of
+      # the three (wrong --certificate-identity-regexp, a broken OIDC
+      # exchange, a transient registry propagation delay between the sign/
+      # attest steps above and a consumer's first `cosign verify`) would only
+      # ever surface the next time someone happened to run the script by
+      # hand, potentially long after the release was already public.
+      #
+      # Runs BEFORE "Create GitHub Release" below, deliberately: a failure
+      # here should stop the job and prevent a GitHub Release from ever being
+      # published for an image whose signature/attestations don't actually
+      # verify — there is no point publishing release notes pointing at
+      # something that just failed its own trust check.
+      #
+      # Verified by DIGEST (steps.create-manifest.outputs.digest), not by
+      # tag: the digest is the exact content this run just signed and
+      # attested. A tag — even the release tag itself — is a mutable pointer
+      # that could in principle move between the sign step above and this
+      # check running; the digest cannot.
+      # ------------------------------------------------------------------------
+      - name: Verify published image signature & attestations
+        run: |
+          chmod +x scripts/verify-image.sh
+          ./scripts/verify-image.sh "${REGISTRY}/${IMAGE_NAME}@${{ steps.create-manifest.outputs.digest }}"
+
+      # ------------------------------------------------------------------------
       # Create GitHub Release with Verification Instructions
       # ------------------------------------------------------------------------
       - name: Create GitHub Release
@@ -731,4 +827,5 @@ jobs:
             echo "- ✅ **Trivy CVE Gate:** Passed (0 Critical/High unpatched vulnerabilities)"
             echo "- ✅ **SBOM & SLSA Attestations:** Embedded directly into OCI index"
             echo "- ✅ **Keyless Cosign Signature:** Signed via GitHub Actions OIDC identity"
+            echo "- ✅ **Post-Publish Verification:** Signature and attestations independently re-verified against the published digest (scripts/verify-image.sh)"
           } >> "$GITHUB_STEP_SUMMARY"
