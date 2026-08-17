@@ -553,6 +553,7 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade pip 
 # treatment as ripgrep/task/gh/etc. below (Section 9), honoring its
 # `source: github` in versions.yaml instead of installing it unpinned from
 # PyPI via pipx.
+# pipx, Poetry, and isolated shared venv patching
 ENV PIPX_HOME=/usr/local/pipx \
     PIPX_BIN_DIR=/usr/local/bin
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -562,7 +563,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     export PATH="/usr/local/bin:${PATH}" && \
     python3 -m pipx ensurepath && \
     pipx install --global "poetry==${POETRY_VERSION}" && \
+    # Upgrade global site-packages
     python3 -m pip install --no-cache-dir --break-system-packages --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
+    # Upgrade pipx shared environment location to clear Trivy finding
+    if [ -f /usr/local/pipx/shared/bin/pip ]; then \
+        /usr/local/pipx/shared/bin/pip install --no-cache-dir --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1"; \
+    fi && \
     chmod -R a+rX /usr/local/pipx
 
 # django-tenants and the rest of the BAOBAB application dependencies are
