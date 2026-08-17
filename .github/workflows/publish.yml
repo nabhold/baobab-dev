@@ -53,15 +53,28 @@
 #
 # TRIVY CLI FLAGS (Phase 3):
 # ----------------------------
-# `--vuln-type` was renamed to `--pkg-types` as of Trivy v0.54.0; `--vuln-type`
+# # `--vuln-type` was renamed to `--pkg-types` as of Trivy v0.54.0; `--vuln-type`
 # is deprecated and scheduled for eventual removal
 # (https://github.com/aquasecurity/trivy/discussions/7268). Since this
 # workflow pins TRIVY_VERSION=0.73.0, `--pkg-types os,library` is used here
-# instead. `--scanners vuln` is now passed explicitly too: `trivy image`
-# enables more than one scanner by default (vulnerabilities and secrets), and
-# this pipeline is deliberately a vulnerability-only gate — the explicit flag
-# makes that intent unambiguous rather than relying on Trivy's current
-# default scanner set, which could grow more scanners are added upstream.
+# instead. `--scanners vuln,secret` is passed explicitly — as of 2026-08-17
+# this pipeline gates on BOTH vulnerabilities and secrets, not vulnerabilities
+# alone; the explicit flag makes that intent unambiguous rather than relying
+# on Trivy's current default scanner set, which could change what it enables
+# by default in a future release.
+# `--skip-java-db-update` skips fetching Trivy's ~900 MB Java vulnerability
+# database on every run: this image ships zero Java artifacts (confirmed via
+# scan output — `[gobinary]`, `[node-pkg]`, `[python-pkg]`, `[rustbinary]`
+# analyzers only, no `[java]`), so that download was pure dead weight.
+# `--skip-files` excludes exactly one generated build artifact,
+# `flutter_web_sdk/**/dart_sdk.js` (Flutter's compiled web SDK bundle,
+# ~14-16 MB), from SECRET scanning only — Trivy's package-vulnerability
+# scanners key off manifests (dist-info, package.json, etc.), not raw file
+# bytes, so this has no effect on CVE coverage of Flutter/Dart. It only
+# spares the secret scanner from regex-scanning a large first-party generated
+# bundle, which is where Trivy's own "size too large" WARN was firing
+# (live-observed 2026-08-17 CI run). Scoped to that one filename pattern,
+# not a directory-wide skip, so nothing else under opt/flutter/ is exempted.
 # `--skip-version-check` disables Trivy's own outbound check for a newer CLI
 # release; that check is an unrelated, unpinned network call with no place in
 # a security gate that already pins the Trivy binary by checksum.
@@ -193,11 +206,27 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Pinned + checksummed rather than fetched from .../releases/latest/... —
+      # same reasoning as every other GitHub-released binary this project
+      # installs (see config/resolve.sh): a floating "latest" URL is
+      # non-deterministic across runs and an unpinned dependency the org's
+      # action-pinning policy would reject if it were a `uses:` reference.
+      # This yq is CI-bootstrap tooling only (parses config/versions.yaml
+      # before versions.lock exists yet) — intentionally decoupled from
+      # YQ_VERSION in versions.lock, which pins the separate yq binary that
+      # ships inside the image itself. Bump YQ_BOOTSTRAP_VERSION/_SHA256
+      # by hand when a newer yq is needed here; this has no relationship to
+      # config/resolve.sh's own "latest" tracking.
       - name: Install yq dependency
+        env:
+          YQ_BOOTSTRAP_VERSION: "4.53.3"
+          YQ_BOOTSTRAP_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          set -euo pipefail
+          curl -fsSL -o /tmp/yq "https://github.com/mikefarah/yq/releases/download/v${YQ_BOOTSTRAP_VERSION}/yq_linux_amd64"
+          echo "${YQ_BOOTSTRAP_SHA256}  /tmp/yq" | sha256sum -c -
+          sudo install -m 0755 /tmp/yq /usr/local/bin/yq
+          rm -f /tmp/yq
 
       - name: Verify lockfile integrity via resolve.sh
         env:
@@ -349,8 +378,8 @@ jobs:
           name: resolved-lockfile
           path: .
 
-      - name: Setup QEMU Emulation
-        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
+      # - name: Setup QEMU Emulation
+      # uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
 
       - name: Setup Docker Buildx Engine
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
@@ -571,7 +600,8 @@ jobs:
         run: |
           trivy image \
             --scanners vuln,secret \
-            --skip-files "**/corepack/**,**/cacache/**,**/dart-sdk/**,**/devtools/**" \
+            --skip-java-db-update \
+            --skip-files "**/corepack/**,**/cacache/**,**/flutter_web_sdk/**/dart_sdk.js,**/devtools/**" \ 
             --pkg-types os,library \
             --severity CRITICAL,HIGH \
             --exit-code 1 \

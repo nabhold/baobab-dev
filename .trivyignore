@@ -220,3 +220,23 @@ CVE-2026-56858 exp:2026-08-29
 CVE-2026-56859 exp:2026-08-29
 CVE-2026-56860 exp:2026-08-29
 CVE-2026-56862 exp:2026-08-29
+# ------------------------------------------------------------------------------
+# GHSA-6v7p-g79w-8964 — msgpack: Out-of-bounds read / crash on Unpacker reuse
+#
+# Found in: pip's own vendored copy (pip/_vendor/msgpack), NOT a separately
+# pip-installed package — reported by Trivy under a path-less "Python"
+# target rather than a discoverable dist-info, because vendored source has
+# no independent package metadata for pip's own dependency resolver to
+# manage. `pip install --upgrade msgpack` anywhere (system, pipx shared,
+# Poetry's own venv) does not reach this; those three install sites are
+# confirmed already at msgpack 1.2.1 in this build.
+#
+# Fixed in: msgpack 1.2.1 (released 2026-06-19). Live-checked 2026-08-17
+# against pip's own vendor.txt across the latest available release
+# (26.2.1 — confirmed via `git ls-remote --tags` against pypa/pip, no
+# newer tag exists): still pins msgpack==1.1.2. Same category as the
+# CVE-2025-47273 setuptools entry above — a dependency frozen inside a
+# third-party redistributed artifact, unfixable from our side until pip
+# ships a release with an updated vendor.txt.
+# ------------------------------------------------------------------------------
+GHSA-6v7p-g79w-8964 exp:2026-11-10
