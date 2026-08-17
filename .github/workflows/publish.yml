@@ -601,7 +601,7 @@ jobs:
           trivy image \
             --scanners vuln,secret \
             --skip-java-db-update \
-            --skip-files "**/corepack/**,**/cacache/**,**/flutter_web_sdk/**/dart_sdk.js,**/devtools/**" \ 
+            --skip-files "**/corepack/**,**/cacache/**,**/flutter_web_sdk/**/dart_sdk.js,**/devtools/**" \
             --pkg-types os,library \
             --severity CRITICAL,HIGH \
             --exit-code 1 \
