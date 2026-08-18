@@ -191,7 +191,7 @@
 # described under "TRIVY CLI FLAGS" above.
 # ==============================================================================
 
-name: Publish BAOBAB Dev Container
+name: Publish Baobab Dev Container
 
 on:
   push:
@@ -502,6 +502,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
           sbom: true
+          # Instruct BuildKit to emit SLSA v1.0 schema inside the in-toto predicate
           provenance: mode=max,version=v1
 
       # ------------------------------------------------------------------------
@@ -932,9 +933,10 @@ jobs:
           for PLATFORM in linux/amd64 linux/arm64; do
             FILE="provenance-$(basename "${PLATFORM}").json"
 
+            # Extract the in-toto statement from the OCI index and isolate the inner SLSA predicate object
             docker buildx imagetools inspect "${IMG}@${DIGEST}" \
               --format "{{ json (index .Provenance \"${PLATFORM}\") }}" \
-              > "${FILE}"
+              | jq '.predicate' > "${FILE}"
 
             # Fail loudly rather than attesting an empty/null predicate: a
             # missing provenance entry for a platform that DID publish a
@@ -943,8 +945,8 @@ jobs:
             # the release for, not silently cosign-signing an empty
             # statement.
             if [[ ! -s "${FILE}" ]] || [[ "$(cat "${FILE}")" == "null" ]]; then
-              echo "::error:: No SLSA provenance found for ${PLATFORM} on ${IMG}@${DIGEST}."
-              echo "::error:: Check the 'build' job's 'Build container image with SBOM & SLSA Provenance' step for ${PLATFORM}."
+              echo "::error:: No SLSA provenance predicate found for ${PLATFORM} on ${IMG}@${DIGEST}."
+              echo "::error:: Check the 'build' job's 'Build container image with SBOM & SLSA Provenance' step."
               exit 1
             fi
           done

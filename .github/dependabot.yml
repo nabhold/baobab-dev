@@ -55,7 +55,7 @@
 # existing "github-actions: patterns: ['*']" grouping already used in this
 # file before this revision.
 #
-# ⚠️ IGNORE-RULE CAVEAT (zensical)
+# IGNORE-RULE CAVEAT (zensical)
 # -----------------------------------
 # The `ignore` entry for zensical below has NO `versions:` qualifier, which
 # means it suppresses ALL updates to that dependency — including security
