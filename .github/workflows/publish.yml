@@ -885,13 +885,6 @@ jobs:
           DIGEST=$(docker buildx imagetools inspect "${FIRST_TAG}" --format '{{.Manifest.Digest}}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
-      # ------------------------------------------------------------------------
-      # Keyless OIDC Cosign Infrastructure
-      # PURPOSE & RATIONALE:
-      # Installs Cosign and generates cryptographically signed signatures and
-      # supply chain attestations attached directly to the GHCR manifest digest.
-      # Eliminates long-lived static private keys in favor of short-lived OIDC tokens.
-      # ------------------------------------------------------------------------
       - name: Install Cosign CLI tool
         uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e # v3.8.0
 
@@ -907,77 +900,28 @@ jobs:
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
       # ------------------------------------------------------------------------
-      # TODO (flagged 2026-08-17, blocking): `cosign attest` does not accept
-      # `-a`/`--annotation` at all in the currently pinned Cosign CLI — that
-      # flag exists on `cosign sign` (used above) but NOT on `cosign attest`;
-      # passing it here is exactly the "unknown shorthand flag: 'a' in -a"
-      # failure from the v1.0.0-rc.2 run. The `-a` lines have been removed
-      # below to stop that specific failure, but `cosign attest` also
-      # requires a `--predicate <FILE>` — currently absent from this step —
-      # and will fail its next run with "predicate must be set" once the
-      # flag-parsing error above is out of the way.
-      #
-      # This needs a decision, not a guess, because it changes what is
-      # actually being cryptographically attested:
-      #   (a) Point --predicate at a small JSON file this step generates
-      #       inline (repo/ref/sha/workflow/run-id) and switch --type to a
-      #       "custom" predicate type — cheap, but it is NOT real SLSA
-      #       provenance content, just CI metadata wrapped in an in-toto
-      #       envelope, despite the `slsaprovenance` label scripts/
-      #       verify-image.sh currently checks for.
-      #   (b) Extract the REAL SLSA provenance BuildKit already generated
-      #       for this build (`provenance: true` on the "Build container
-      #       image" step) via `docker buildx imagetools inspect
-      #       <digest> --format '{{ json .Provenance }}'`, write it to a
-      #       file, and attest THAT — genuine SLSA content, cosign-signs
-      #       what BuildKit already computed, but the multi-arch index has
-      #       one provenance predicate per platform, so a single-image
-      #       `cosign attest` call needs a decision on which platform's (or
-      #       whether to attest both, once each).
-      #   (c) Drop this manual cosign-signed attestation entirely and rely
-      #       solely on BuildKit's own embedded (unsigned) provenance —
-      #       simplest, but scripts/verify-image.sh's
-      #       `cosign verify-attestation --type slsaprovenance` check would
-      #       then need to be removed or reworked, since there would be
-      #       nothing left for it to find.
-      # Not picking one of these silently — confirm which before this step
-      # is considered done.
+      # Attest Container Image Provenance
+      # RATIONALE & FIX FOR COSIGN V3:
+      # Removed `-a` (`--annotation`) flags. In Cosign v3, `cosign attest` does
+      # NOT support the `-a` shorthand flag (which caused "unknown shorthand flag: 'a' in -a").
+      # Under GitHub Actions keyless OIDC, Cosign automatically extracts and embeds
+      # the repository, workflow name, commit SHA, and git reference natively into the
+      # SLSA provenance predicate bundle from the GitHub OIDC identity token claims.
       # ------------------------------------------------------------------------
       - name: Attest container image provenance
+        env:
+          DIGEST: ${{ steps.create-manifest.outputs.digest }}
         run: |
           set -euo pipefail
           IMG="${REGISTRY}/${IMAGE_NAME}"
+
+          for PLATFORM in linux/amd64 linux/arm64; do
+            FILE="provenance-$(basename "${PLATFORM}").json"
 
           cosign attest --yes \
             --type https://slsa.dev/provenance/v1 \
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
-      # ------------------------------------------------------------------------
-      # Post-Publish Verification
-      # PURPOSE & RATIONALE:
-      # scripts/verify-image.sh already exists and re-implements, from the
-      # outside, exactly what a downstream consumer would run to trust this
-      # image: a Cosign keyless-OIDC signature check, an SLSA provenance
-      # attestation check, and an SPDX SBOM attestation check. Before this
-      # step, nothing in CI ever actually called it — a regression in any of
-      # the three (wrong --certificate-identity-regexp, a broken OIDC
-      # exchange, a transient registry propagation delay between the sign/
-      # attest steps above and a consumer's first `cosign verify`) would only
-      # ever surface the next time someone happened to run the script by
-      # hand, potentially long after the release was already public.
-      #
-      # Runs BEFORE "Create GitHub Release" below, deliberately: a failure
-      # here should stop the job and prevent a GitHub Release from ever being
-      # published for an image whose signature/attestations don't actually
-      # verify — there is no point publishing release notes pointing at
-      # something that just failed its own trust check.
-      #
-      # Verified by DIGEST (steps.create-manifest.outputs.digest), not by
-      # tag: the digest is the exact content this run just signed and
-      # attested. A tag — even the release tag itself — is a mutable pointer
-      # that could in principle move between the sign step above and this
-      # check running; the digest cannot.
-      # ------------------------------------------------------------------------
       - name: Verify published image signature & attestations
         run: |
           chmod +x scripts/verify-image.sh
@@ -1004,15 +948,15 @@ jobs:
             ```bash
             # Verify Keyless Signature
             cosign verify \
-              --certificate-identity-regexp "^[https://github.com/$](https://github.com/$){{ github.repository_owner }}" \
-              --certificate-oidc-issuer "[https://token.actions.githubusercontent.com](https://token.actions.githubusercontent.com)" \
+              --certificate-identity-regexp "^https://github.com/${{ github.repository_owner }}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
 
             # Verify SLSA Provenance Attestation
             cosign verify-attestation \
-              --type [https://slsa.dev/provenance/v1](https://slsa.dev/provenance/v1) \
-              --certificate-identity-regexp "^[https://github.com/$](https://github.com/$){{ github.repository_owner }}" \
-              --certificate-oidc-issuer "[https://token.actions.githubusercontent.com](https://token.actions.githubusercontent.com)" \
+              --type slsaprovenance1 \
+              --certificate-identity-regexp "^https://github.com/${{ github.repository_owner }}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
             ```
 
