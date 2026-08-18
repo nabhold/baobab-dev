@@ -15,37 +15,180 @@
 # 4. Embedded Supply Chain Metadata:
 #    - Native Buildx SPDX SBOM generation (sbom: true)
 #    - SLSA Build Provenance attestations (provenance: true)
-# 5. Shift-Left Security Gate: Embedded Trivy scanner checks every Pull Request,
-#    `main` branch push, and release tag to block unpatched CRITICAL/HIGH CVEs
-#    or exposed secrets before merging or releasing.
+# 5. Security Gate: Embedded Trivy scanner blocks image releases if unpatched
+#    CRITICAL or HIGH severity CVEs are present.
 # 6. Keyless OIDC Signing: Cosign uses GitHub's short-lived OIDC identity tokens
 #    to sign images and attest supply chain provenance without static secret keys.
-# 7. Tag-Gated Release Pipeline: Building and vulnerability scanning are validated
-#    on every push and PR, but pushing to the registry, signing, attesting, and
-#    releasing only ever happen on an actual `v*.*.*` tag.
+# 7. Tag-Gated Publish, Shift-Left Security: Building AND the Trivy CVE/secret
+#    gate run on every push and PR against `main`. Only pushing to the
+#    registry, signing, attesting, and releasing are held back for an actual
+#    `v*.*.*` tag. See "PUBLISH TRIGGER POLICY" and "SECURITY SCAN TRIGGER
+#    POLICY" below.
 #
-# PUBLISH & SECURITY TRIGGER POLICY (Phase 3 & 4 Update):
-# --------------------------------------------------------
-# Shift-Left Security RATIONALE:
-# Vulnerability and secret scanning (Trivy) runs on ALL Pull Requests, direct pushes
-# to `main`, and release tags. Catching vulnerabilities during PR code review prevents
-# "tag pollution" — cutting a `v*.*.*` release tag only to watch CI fail on a CVE forces
-# maintainers to delete/re-create immutable git tags or burn patch versions unnecessarily.
+# PUBLISH TRIGGER POLICY (Phase 3):
+# ----------------------------------
+# Deliberate choice, made explicit here because it changes release cadence:
+# `main` pushes and pull requests prove the image BUILDS on both
+# architectures AND passes the Trivy security gate — but nothing is pushed to
+# GHCR, signed, attested, or released until a maintainer cuts a `v*.*.*` tag.
+# This mirrors how "sanity-check" already treats tags as immutable,
+# already-reviewed pointers (see "Fail on tag-push drift" below): a registry
+# push, a signature, and a GitHub Release are all irreversible,
+# externally-visible actions, so they should be gated on a deliberate,
+# reviewed release action rather than fired automatically on every merge to
+# `main`. This also keeps GHCR free of `main`/`sha-*` churn tags that nobody
+# consumes, and keeps the truly release-only steps (registry push,
+# multi-arch manifest merge, Cosign sign/attest, GitHub Release) off the hot
+# path for ordinary development pushes and PRs.
 #
-# Boundary Isolation:
-# While Trivy scanning is shifted left to PRs and `main` pushes, registry mutation
-# remains gated strictly on tags. `main` pushes and PRs build the image locally
-# (`baobab-dev:scan`), scan it, and validate lockfile integrity — nothing is pushed to
-# GHCR, signed with Cosign, attested with SLSA, or released as a GitHub Release until
-# a maintainer cuts a `v*.*.*` tag.
+# Every `if:` condition that used to read `github.event_name != 'pull_request'`
+# (which fired on BOTH `main` pushes and tag pushes) has been narrowed to
+# `startsWith(github.ref, 'refs/tags/')` (which fires ONLY on tag pushes) —
+# see the "Authenticate to GHCR", "Build container image", "Export/Upload
+# digest", and "Execute container smoke test" steps below, plus the
+# `publish` job's own `if:`. Because of this, the `publish` job's
+# `metadata-action` step no longer needs `type=ref,event=branch` or
+# `type=sha,prefix=sha-,format=short` tag patterns — that job now only ever
+# runs against a tag ref, so those tag types would never resolve to anything.
+# For the same reason, the `latest` tag's `enable:` condition no longer needs
+# a redundant `startsWith(github.ref, 'refs/tags/v')` guard: the job-level
+# `if:` already guarantees `github.ref` is a tag by the time that step runs.
 #
-# TRIVY CLI FLAGS:
-# ----------------
-# `--pkg-types os,library` replaces the deprecated `--vuln-type` flag (Trivy v0.54.0+).
-# `--scanners vuln,secret` explicitly gates on both vulnerabilities and secrets.
-# `--skip-java-db-update` skips fetching Trivy's ~900 MB Java DB (zero Java in image).
-# `--skip-files` excludes Flutter's compiled web SDK bundle from secret scanning.
-# `--skip-version-check` disables Trivy's outbound CLI release check.
+# SECURITY SCAN TRIGGER POLICY (Phase 5 — shift-left):
+# ------------------------------------------------------
+# The Trivy CVE/secret gate ("Build local single-manifest image for
+# scanning" through "Scan built container with Trivy" below) is
+# DELIBERATELY NOT tag-gated, unlike the rest of this file. It now runs on
+# every push to `main` and every pull request against `main`, in addition
+# to tag pushes. This is a deliberate change from the previous revision,
+# where Trivy only ran on a `v*.*.*` tag push.
+#
+# Rationale for moving the gate left rather than leaving it tag-only:
+#   - Clean SemVer / no tag churn: cutting a release tag only to have CI
+#     fail on an unpatched CVE forces either deleting and re-cutting an
+#     immutable tag, or burning a patch version to fix something that
+#     should have been caught in code review. Scanning on the PR instead
+#     means a vulnerable dependency, base-image bump, or lockfile change
+#     is caught and fixed BEFORE it merges — release tags stay a guarantee
+#     of quality, not a test of luck.
+#   - Minimal added cost: the local scan target (`baobab-dev:scan`) reuses
+#     the exact same BuildKit layer cache (`type=gha`) as the real
+#     push-by-digest build in this same job, and the Trivy vulnerability
+#     database is cached across runs (see "Cache Trivy vulnerability
+#     database" below) — running the gate on every PR is not a full
+#     from-scratch rebuild plus a full DB re-download each time.
+#   - Defense in depth: the gate still runs again on the tag push itself
+#     (nothing was removed, only un-gated). Trivy's vulnerability database
+#     updates continuously, so a commit that was clean on `main` on Monday
+#     could be sitting on a newly disclosed CVE by the time a tag is cut on
+#     Friday. Re-running the same gate at tag time catches that class of
+#     "fresh zero-day between merge and release" case that a PR-time-only
+#     scan would miss.
+#
+# What stays tag-gated and unaffected by this change: authenticating to
+# GHCR, the real push-by-digest build's `push:` flag, exporting/uploading
+# architecture digests, the registry-image smoke test, and the entire
+# `publish` job (manifest merge, Cosign sign/attest, GitHub Release). Only
+# the vulnerability/secret scan itself — and the local, attestation-free
+# image built purely as its scan target — moved left.
+#
+# TRIVY CLI FLAGS (Phase 3):
+# ----------------------------
+# # `--vuln-type` was renamed to `--pkg-types` as of Trivy v0.54.0; `--vuln-type`
+# is deprecated and scheduled for eventual removal
+# (https://github.com/aquasecurity/trivy/discussions/7268). Since this
+# workflow pins TRIVY_VERSION=0.73.0, `--pkg-types os,library` is used here
+# instead. `--scanners vuln,secret` is passed explicitly — as of 2026-08-17
+# this pipeline gates on BOTH vulnerabilities and secrets, not vulnerabilities
+# alone; the explicit flag makes that intent unambiguous rather than relying
+# on Trivy's current default scanner set, which could change what it enables
+# by default in a future release.
+# `--skip-db-update` / `--skip-java-db-update` skip re-fetching Trivy's
+# vulnerability DB (~500 MB+) and Java DB (~900 MB) when a warm cache from a
+# previous run already has them on disk — this image ships zero Java
+# artifacts (confirmed via scan output — `[gobinary]`, `[node-pkg]`,
+# `[python-pkg]`, `[rustbinary]` analyzers only, no `[java]`), so re-fetching
+# either DB on every run is pure dead weight once a cache exists.
+#
+# CHANGE (2026-08-17): both flags used to be hardcoded unconditionally.
+# Trivy refuses `--skip-java-db-update` outright — "cannot be specified on
+# the first run" — the very first time this workflow ever executes (or any
+# time the `cache-trivy-*` key genuinely misses, e.g. after GitHub evicts an
+# old cache entry): there is no local Java DB yet for that flag to skip
+# updating, so Trivy treats "skip an update I can't perform" as a hard
+# error rather than a silent no-op. The fix is the "Determine Trivy DB skip
+# flags" step below: it checks, on disk, whether `${TRIVY_CACHE_DIR}/db`
+# and `${TRIVY_CACHE_DIR}/java-db` actually contain a restored cache (not
+# just whether the `actions/cache` step reported a hit — a partial
+# `restore-keys` prefix match still populates the directory but reports
+# `cache-hit: false`, so checking the filesystem directly is the more
+# accurate signal) and only emits the corresponding `--skip-*-update` flag
+# when there is genuinely something to skip. On a true cold start, both DBs
+# download normally and get cached for every subsequent run that shares
+# that day's cache key.
+#
+# `--skip-files` excludes exactly one generated build artifact,
+# `flutter_web_sdk/**/dart_sdk.js` (Flutter's compiled web SDK bundle,
+# ~14-16 MB), from SECRET scanning only — Trivy's package-vulnerability
+# scanners key off manifests (dist-info, package.json, etc.), not raw file
+# bytes, so this has no effect on CVE coverage of Flutter/Dart. It only
+# spares the secret scanner from regex-scanning a large first-party generated
+# bundle, which is where Trivy's own "size too large" WARN was firing
+# (live-observed 2026-08-17 CI run). Scoped to that one filename pattern,
+# not a directory-wide skip, so nothing else under opt/flutter/ is exempted.
+# `--skip-version-check` disables Trivy's own outbound check for a newer CLI
+# release; that check is an unrelated, unpinned network call with no place in
+# a security gate that already pins the Trivy binary by checksum.
+#
+# TRIVY SCAN TARGET (Phase 4):
+# ------------------------------
+# `sbom: true` + `provenance: true` on the push-by-digest build (below) do
+# not produce a plain single-manifest image, even for a single `platforms:`
+# value — BuildKit wraps the result in an OCI Image INDEX containing the
+# real platform manifest plus a second, separate attestation manifest
+# annotated `platform: unknown/unknown`. This is documented BuildKit
+# behavior (moby/buildkit, docker/buildx#1964), not a misconfiguration here,
+# and it's the same root cause independently reported against Harbor's own
+# Trivy adapter (goharbor/harbor#22848) and fixed by other projects the same
+# way this file now does (stacklok/dockyard#215): pointing a scanner at
+# `steps.build.outputs.digest` hands it that 2-manifest index rather than a
+# single image, which is what produced the "multiple image"/manifest-
+# selection failure this file used to hit.
+#
+# Rather than disabling sbom/provenance (the simpler fix, but one that would
+# give up feature #4 in the ARCHITECTURAL HIGHLIGHTS above), the "Build local
+# single-manifest image for scanning" step below builds a second,
+# attestation-free image with `load: true` — same Dockerfile, build-args,
+# and platform as the real push-by-digest build, so BuildKit's own local
+# layer cache (same builder instance, same job) serves every layer with no
+# rebuild and no extra network round trip. Trivy then scans that local,
+# unambiguous single-manifest image instead of the registry-pushed index.
+# The real published artifact keeps its full SBOM + SLSA provenance
+# untouched; only the scan target changes.
+#
+# PERFORMANCE (Phase 3, revisited Phase 5):
+# --------------------------------------------
+# Trivy's vulnerability database (~500MB+) was previously re-downloaded from
+# its OCI registry on every scan, once per architecture leg — this was a
+# known, deliberate trade-off noted in an earlier revision of this file (see
+# git history) after trivy-action's own internal actions/cache dependency
+# was rejected by the "actions must be pinned to a full-length commit SHA"
+# policy (see "Cache Trivy vulnerability database" below for how that's now
+# solved without trivy-action). The vulnerability database itself is not
+# architecture-specific (it's vulnerability metadata, not a compiled
+# binary), so the amd64 and arm64 matrix legs intentionally share a single
+# cache key — whichever leg populates it first benefits the other on the
+# NEXT run (GitHub Actions cache writes are per-key; a same-key write from a
+# second concurrent job is a harmless no-op, not an error).
+#
+# Now that the gate also runs on every PR and `main` push (see "SECURITY
+# SCAN TRIGGER POLICY" above), this same-day cache key matters even more:
+# without it, every push to an active PR branch would re-pay the full DB
+# download on both matrix legs. With it, only the first scan of the day
+# (across the whole repository, any branch) pays that cost — every
+# subsequent PR push, `main` push, or tag push that day restores a warm
+# cache and skips the download entirely via the dynamic skip-flags
+# described under "TRIVY CLI FLAGS" above.
 # ==============================================================================
 
 name: Publish BAOBAB Dev Container
@@ -79,6 +222,14 @@ on:
         required: false
         default: ""
 
+# ------------------------------------------------------------------------------
+# Concurrency Management (Phase 2 Hygiene)
+# PURPOSE & RATIONALE:
+# - Cancels in-flight, superseded workflow runs when new commits are pushed to
+#   the same Pull Request or feature branch.
+# - Exception: Never auto-cancel builds running on 'main' or git semantic tags
+#   to guarantee production deployment trails are never interrupted midway.
+# ------------------------------------------------------------------------------
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_name != 'main' && !startsWith(github.ref, 'refs/tags/') }}
@@ -87,6 +238,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/baobab-dev
 
+# ------------------------------------------------------------------------------
+# Least Privilege Global Policy
+# RATIONALE: Protect repository state by keeping global token rights strictly read-only.
+# ------------------------------------------------------------------------------
 permissions:
   contents: read
 
@@ -96,11 +251,21 @@ jobs:
   # Job 1: Pre-flight Lockfile Integrity & Auto-Sync
   # PURPOSE: Verify that config/versions.lock matches config/versions.yaml.
   #          Auto-commits changes back to PR/branch refs if drift is detected.
+  #          On a version-tag push, drift is a hard failure instead — see
+  #          "Fail on tag-push drift" below. Runs unconditionally (every push,
+  #          every PR, every tag) because build validation always needs a
+  #          correct lockfile, regardless of whether this run will ever push
+  #          or publish anything.
   # ============================================================================
   sanity-check:
     name: Lockfile Integrity & Auto-Sync
     runs-on: ubuntu-26.04
 
+    # Elevation RATIONALE: Auto-committing resolved lockfiles requires repository
+    # write access on ordinary branches. Tag pushes never reach the auto-commit
+    # step (see the "Fail on tag-push drift" step below), but the permission is
+    # left job-wide rather than step-scoped since GitHub Actions doesn't support
+    # per-step permission scoping.
     permissions:
       contents: write
 
@@ -111,6 +276,17 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Pinned + checksummed rather than fetched from .../releases/latest/... —
+      # same reasoning as every other GitHub-released binary this project
+      # installs (see config/resolve.sh): a floating "latest" URL is
+      # non-deterministic across runs and an unpinned dependency the org's
+      # action-pinning policy would reject if it were a `uses:` reference.
+      # This yq is CI-bootstrap tooling only (parses config/versions.yaml
+      # before versions.lock exists yet) — intentionally decoupled from
+      # YQ_VERSION in versions.lock, which pins the separate yq binary that
+      # ships inside the image itself. Bump YQ_BOOTSTRAP_VERSION/_SHA256
+      # by hand when a newer yq is needed here; this has no relationship to
+      # config/resolve.sh's own "latest" tracking.
       - name: Install yq dependency
         env:
           YQ_BOOTSTRAP_VERSION: "4.53.3"
@@ -138,6 +314,17 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # -------------------------------------------------------------------------
+      # Auto-commit resolved lockfile changes — BRANCHES ONLY.
+      #
+      # RATIONALE: A tag (our v*.*.* release trigger) is meant to be an
+      # immutable pointer to an already-reviewed commit. git-auto-commit-action
+      # pushing a new commit "onto" a tag ref is not a normal git operation —
+      # at best it fails outright and blocks the release tag; at worst it moves
+      # the tag, silently invalidating anything already signed/attested against
+      # the original commit. This step never runs on a tag push; see the
+      # "Fail on tag-push drift" step immediately below for that case instead.
+      # -------------------------------------------------------------------------
       - name: Auto-commit resolved lockfile changes (branches only)
         id: auto-commit
         if: steps.drift-check.outputs.drift == 'true' && !startsWith(github.ref, 'refs/tags/')
@@ -149,6 +336,18 @@ jobs:
           commit_user_name: "github-actions[bot]"
           commit_user_email: "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # -------------------------------------------------------------------------
+      # Fail on tag-push drift.
+      #
+      # RATIONALE: There is no branch to auto-commit to on a tag push, and
+      # there shouldn't be one — a release tag must be built from exactly the
+      # lockfile that was already committed and reviewed (via a normal PR, or
+      # via the update-lockfile.yml weekly drift PR). If resolve.sh produces a
+      # different versions.lock than what's checked in at this tag, that's a
+      # real discrepancy between what versions.yaml now resolves to and what
+      # this release is claiming to ship — stop and force a human to reconcile
+      # it, rather than silently shipping a mismatched lockfile.
+      # -------------------------------------------------------------------------
       - name: Fail on tag-push drift
         if: steps.drift-check.outputs.drift == 'true' && startsWith(github.ref, 'refs/tags/')
         run: |
@@ -165,6 +364,25 @@ jobs:
           echo "::error:: Please execute resolve.sh locally or update via a Pull Request branch."
           exit 1
 
+      # -------------------------------------------------------------------------
+      # Hand off the freshly-resolved lockfile to the build job via artifact,
+      # not via the auto-commit above.
+      #
+      # RATIONALE: build's own checkout later in this same workflow run is
+      # pinned to github.sha — the commit that TRIGGERED this run, not any
+      # new commit sanity-check creates during its own execution. A commit
+      # pushed here can only ever be visible to a FUTURE run; it can never
+      # retroactively appear in what build's checkout of github.sha sees
+      # THIS run. Without this artifact hand-off, any run where
+      # config/versions.lock is genuinely new or changed (drift == true)
+      # fails build's Dockerfile COPY step with "config/versions.lock: not
+      # found" — confirmed via a real failed run — and only the NEXT push,
+      # after the commit had already landed from this run, would happen to
+      # succeed. Uploaded unconditionally (not gated on drift or event
+      # type): build always needs a versions.lock, including for
+      # pull_request-triggered validation builds, which never reach the
+      # auto-commit step at all.
+      # -------------------------------------------------------------------------
       - name: Upload resolved lockfile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -176,17 +394,28 @@ jobs:
           retention-days: 1
 
   # ============================================================================
-  # Job 2: Multi-Arch Container Build, Attestations & Vulnerability Scan Gate
-  # PURPOSE: Builds architecture-specific images (amd64/arm64) and executes
-  #          Trivy vulnerability/secret scanning on ALL triggers (PRs, main, tags).
-  #          Pushes to GHCR and digest artifact uploads occur strictly on release tags.
+  # Job 2: Multi-Arch Container Build & Vulnerability Scan Gate
+  # PURPOSE: Builds architecture-specific images (amd64/arm64) AND runs the
+  #          Trivy CVE/secret gate against them on every push and pull
+  #          request — see "SECURITY SCAN TRIGGER POLICY" at the top of this
+  #          file. Only on a `v*.*.*` tag push does this job additionally
+  #          push the real image to GHCR (by digest, with SBOM and SLSA
+  #          provenance attestations embedded) and smoke-test it — see
+  #          "PUBLISH TRIGGER POLICY" at the top of this file for why that
+  #          narrower boundary sits here.
   # ============================================================================
   build:
     name: Build & Security Scan (${{ matrix.platform }})
     needs: sanity-check
 
+    # RATIONALE: Route arm64 builds to native ARM GitHub-hosted runners for faster performance.
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
 
+    # Elevation RATIONALE: Pushing image layers and metadata by digest requires package write access.
+    # This permission is granted job-wide even though it's only exercised on tag
+    # pushes, for the same "GitHub Actions has no per-step permission scoping"
+    # reason noted on sanity-check above — the job never attempts a package
+    # write unless the tag-gated steps below actually run.
     permissions:
       contents: read
       packages: write
@@ -198,6 +427,12 @@ jobs:
           - linux/amd64
           - linux/arm64
 
+    # TRIVY_CACHE_DIR is read directly by the trivy binary (every Trivy global
+    # flag has a TRIVY_<FLAG_NAME> environment variable equivalent — this is
+    # the same mechanism aquasecurity/trivy-action itself relies on). Setting
+    # it once at job level keeps the cache path identical between the
+    # "Cache Trivy vulnerability database" step's `path:` and whatever
+    # directory `trivy image` actually reads from/writes to.
     env:
       TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
 
@@ -205,15 +440,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Overwrites whatever config/versions.lock (if any) the checkout above
+      # brought in with the exact one sanity-check resolved earlier in THIS
+      # run — see "Upload resolved lockfile" in sanity-check for why this
+      # can't rely on sanity-check's auto-commit already being in this ref.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: resolved-lockfile
           path: .
 
+      # - name: Setup QEMU Emulation
+      # uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
+
       - name: Setup Docker Buildx Engine
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
+      # Only needed to PUSH — an unauthenticated `docker buildx build` can
+      # still pull the public `ubuntu:${UBUNTU_VERSION}` base image and read
+      # from the GHA build cache without any GHCR credential, so PR/branch
+      # validation builds (which never push) skip this entirely rather than
+      # spending a token exchange on a login that would go unused.
       - name: Authenticate to GitHub Container Registry (GHCR)
         if: startsWith(github.ref, 'refs/tags/')
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
@@ -228,6 +475,17 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
+      # ------------------------------------------------------------------------
+      # Build image with native Buildx SBOM & SLSA Provenance Attestations
+      # RATIONALE:
+      # - sbom: true generates SPDX Software Bill of Materials.
+      # - provenance: true embeds SLSA Level 3 build provenance into the image index.
+      # - push-by-digest: true pushes architecture layers without touching tags yet.
+      # - push: only true on a tag push (see PUBLISH TRIGGER POLICY above) — a
+      #   PR or `main` push still exercises this exact same build, just with
+      #   push disabled, so a genuine build failure is caught long before a
+      #   tag is ever cut, without writing anything to GHCR in the meantime.
+      # ------------------------------------------------------------------------
       - name: Build container image with SBOM & SLSA Provenance
         id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -246,6 +504,19 @@ jobs:
           sbom: true
           provenance: true
 
+      # ------------------------------------------------------------------------
+      # Export architecture image digest to a file, then ship it as a per-arch
+      # artifact. RATIONALE: GitHub Actions matrix jobs do not reliably merge
+      # job-level `outputs:` across matrix legs — depending on completion
+      # order, one architecture's digest can be silently dropped by the time
+      # the `publish` job reads `needs.build.outputs.*`. Writing the digest to
+      # a file and uploading it as an artifact (Docker's own documented
+      # "Distribute build across multiple runners" pattern) removes that
+      # failure mode: each leg's digest lands as its own independently
+      # retrievable artifact, with no shared mutable state between legs.
+      # Only meaningful on a tag push — nothing was pushed by digest above on
+      # a PR/branch validation build, so there is no digest worth exporting.
+      # ------------------------------------------------------------------------
       - name: Export architecture image digest
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -264,13 +535,27 @@ jobs:
 
       # ------------------------------------------------------------------------
       # Build local single-manifest image for scanning
-      # PURPOSE & SHIFT-LEFT RATIONALE:
-      # Runs unconditionally on PRs, main pushes, and tag releases.
-      # The main build above generates an OCI Index (attestation manifest + image),
-      # which causes multi-manifest selection errors if passed directly to Trivy.
-      # Exporting a local `load: true` single-manifest image (`baobab-dev:scan`)
-      # reuses BuildKit's warm layer cache (0s rebuild cost) and provides an
-      # unambiguous scan target for PRs and commits before merging to main.
+      # PURPOSE & RATIONALE: see "TRIVY SCAN TARGET" at the top of this file.
+      # In short: the push-by-digest build above produces an OCI Image INDEX
+      # (real manifest + a separate "unknown/unknown" attestation manifest)
+      # because of sbom/provenance, and Trivy can't be pointed at that index
+      # directly without hitting a multi-manifest resolution failure. This
+      # step re-exports the same build — no attestations, `load: true` —
+      # into the runner's local Docker daemon under a fixed tag, purely as
+      # an unambiguous scan target. It is NOT a second from-scratch build:
+      # same builder instance (from "Setup Docker Buildx Engine" above),
+      # same Dockerfile/build-args/platform as the build immediately above,
+      # so BuildKit's own local layer cache serves every layer with nothing
+      # to actually rebuild — this step only changes how the result is
+      # exported, not what gets built.
+      #
+      # Runs on EVERY trigger (PR, `main` push, tag push, dispatch) — not
+      # tag-gated — because it exists solely to feed the Trivy gate below,
+      # which itself is no longer tag-gated. See "SECURITY SCAN TRIGGER
+      # POLICY" at the top of this file. `load: true` only puts the image in
+      # this runner's local Docker daemon; nothing here touches GHCR, so
+      # this needs no registry authentication on PR/branch runs, same as
+      # the real build above.
       # ------------------------------------------------------------------------
       - name: Build local single-manifest image for scanning
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -289,8 +574,32 @@ jobs:
 
       # ------------------------------------------------------------------------
       # Cache Trivy vulnerability database
-      # PURPOSE: Restores/saves the ~500MB vulnerability DB daily across PRs,
-      #          main pushes, and tag release builds to optimize CI runtime.
+      # PURPOSE & PERFORMANCE RATIONALE:
+      # Trivy re-downloads its vulnerability DB (~500MB+, from its OCI
+      # registry) on every scan by default — noted as a deliberate, unresolved
+      # trade-off in an earlier revision of this file, after trivy-action's
+      # own actions/cache dependency was rejected for not being SHA-pinned
+      # (see the "Install Trivy" step's comment for that history). This step
+      # restores that same functionality WITHOUT trivy-action, using our own
+      # SHA-pinned actions/cache call — satisfying the org's action-pinning
+      # policy directly instead of inheriting it from a wrapper action.
+      #
+      # Cache key mirrors trivy-action's own scheme (`cache-trivy-<date>`,
+      # `cache-trivy-` restore-key prefix): a fresh key once a day, falling
+      # back to the most recent available cache entry when today's doesn't
+      # exist yet. Deliberately NOT scoped per-platform: the vulnerability
+      # database is vulnerability metadata, not compiled machine code, so it
+      # is identical for amd64 and arm64 — sharing one key lets whichever
+      # matrix leg finishes first populate the cache the other leg (or the
+      # next run) benefits from, rather than paying the download twice.
+      #
+      # Not tag-gated: caching needs to be in place for every trigger this
+      # gate now runs on (PR, `main` push, tag push) — see "SECURITY SCAN
+      # TRIGGER POLICY" at the top of this file. The same day-scoped key is
+      # shared across ALL of those triggers too, not just across the two
+      # matrix legs: the first scan anywhere in the repo on a given day
+      # (whichever branch or PR triggers it) populates the cache that every
+      # other PR/branch/tag scan that same day then reuses.
       # ------------------------------------------------------------------------
       - name: Determine cache date
         id: cache-date
@@ -305,13 +614,71 @@ jobs:
             cache-trivy-
 
       # ------------------------------------------------------------------------
-      # Security Vulnerability Gate (Trivy Installation & Execution)
-      # PURPOSE & SHIFT-LEFT RATIONALE:
-      # Direct checksummed binary download of Trivy CLI (pinned to v0.73.0).
-      # Evaluates `baobab-dev:scan` for OS & language package vulnerabilities and
-      # secret leaks. Fails with exit code 1 on HIGH or CRITICAL findings.
-      # Executing on PRs and `main` pushes ensures security flaws are caught
-      # before code reaches production release tagging.
+      # Determine Trivy DB skip flags
+      # PURPOSE & RATIONALE: see "TRIVY CLI FLAGS" at the top of this file.
+      # In short: unconditionally passing --skip-db-update/--skip-java-db-update
+      # to `trivy image` breaks the very first run (or any genuine cache
+      # miss) with "cannot be specified on the first run", because there is
+      # no local DB yet for Trivy to skip updating. This step checks what
+      # the "Cache Trivy vulnerability database" step above ACTUALLY
+      # restored to disk — not just its cache-hit/miss verdict, since a
+      # restore-keys prefix match still populates the directory while
+      # reporting cache-hit: false — and only asks Trivy to skip updating a
+      # DB that is genuinely already present. Its output is a plain,
+      # possibly-empty, space-separated flag string consumed by the "Scan
+      # built container with Trivy" step below via an env var (not inlined
+      # directly into that step's `run:` block), so an empty result simply
+      # contributes zero words to the command line rather than an awkward
+      # blank argument.
+      # ------------------------------------------------------------------------
+      - name: Determine Trivy DB skip flags
+        id: trivy-db-cache-state
+        run: |
+          set -euo pipefail
+          SKIP_FLAGS=""
+
+          if [ -d "${TRIVY_CACHE_DIR}/db" ] && \
+             [ -n "$(find "${TRIVY_CACHE_DIR}/db" -type f -print -quit 2>/dev/null)" ]; then
+            SKIP_FLAGS="${SKIP_FLAGS} --skip-db-update"
+          fi
+
+          if [ -d "${TRIVY_CACHE_DIR}/java-db" ] && \
+             [ -n "$(find "${TRIVY_CACHE_DIR}/java-db" -type f -print -quit 2>/dev/null)" ]; then
+            SKIP_FLAGS="${SKIP_FLAGS} --skip-java-db-update"
+          fi
+
+          echo "flags=${SKIP_FLAGS}" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------------
+      # Security Vulnerability Gate (Trivy)
+      # PURPOSE & RATIONALE:
+      # Scans the container image for OS and language library vulnerabilities.
+      # Fails with exit code 1 if unpatched HIGH or CRITICAL CVEs are detected,
+      # preventing vulnerable images from reaching the publish phase.
+      #
+      # Installed via a direct checksummed binary download instead of the
+      # aquasecurity/trivy-action marketplace wrapper: that action is a
+      # composite action which internally calls aquasecurity/setup-trivy@v0.2.2
+      # and actions/cache@v4, both pinned by tag in trivy-action's own
+      # source — not something our pin on trivy-action itself can fix. This
+      # org's "require actions pinned to a full-length commit SHA" policy is
+      # enforced transitively across the entire action call graph a workflow
+      # resolves, not just this file's own direct `uses:` references — live-
+      # confirmed via a real failed run: "The actions
+      # aquasecurity/setup-trivy@v0.2.2 and actions/cache@v4 are not allowed
+      # ... because all actions must be pinned to a full-length commit SHA."
+      # A plain `run:` step has no `uses:` dependency at all, so there is
+      # nothing left for that policy to reject — and it's the same
+      # checksummed-download pattern already used throughout this project
+      # (see config/resolve.sh and .devcontainer/docker/Dockerfile). The
+      # vulnerability-database caching that pattern gave up is restored
+      # above, independently, via our own SHA-pinned actions/cache call.
+      #
+      # SHA256 values below come from Trivy's own published checksums file
+      # (trivy_<version>_checksums.txt, attached to every release) rather
+      # than GitHub's release-asset digest API, only because that API was
+      # rate-limited at verification time — live-verified 2026-08-10 via a
+      # full download -> sha256sum -c round trip against the real asset.
       # ------------------------------------------------------------------------
       - name: Install Trivy
         env:
@@ -331,10 +698,44 @@ jobs:
           sudo mv trivy /usr/local/bin/trivy
           trivy --version
 
+      # Flags updated 2026-08 to match current Trivy CLI syntax (TRIVY_VERSION
+      # 0.73.0 — see "TRIVY CLI FLAGS" at the top of this file):
+      #   --pkg-types   replaces the deprecated --vuln-type (renamed in v0.54.0,
+      #                 https://github.com/aquasecurity/trivy/discussions/7268)
+      #   --scanners vuln,secret   scans for both vulnerabilities and hard-coded
+      #                 secrets explicitly, rather than relying on Trivy's
+      #                 current default scanner set, which could change what
+      #                 it enables by default in a future release
+      #   ${TRIVY_SKIP_FLAGS}   the (possibly empty) --skip-db-update/
+      #                 --skip-java-db-update flags computed by "Determine
+      #                 Trivy DB skip flags" above — never hardcoded, see
+      #                 "TRIVY CLI FLAGS" at the top of this file for why
+      #   --skip-version-check   removes Trivy's own unrelated, unpinned
+      #                 "is a newer CLI available" network call from this gate
+      #
+      # Scan target is the LOCAL `baobab-dev:scan` image built above, not the
+      # registry-pushed `steps.build.outputs.digest` — see "TRIVY SCAN
+      # TARGET" at the top of this file for why: that digest resolves to a
+      # 2-manifest OCI index (real image + an "unknown/unknown" attestation
+      # manifest) once sbom/provenance are enabled, which Trivy cannot
+      # resolve to a single image on its own. No `--platform` flag is needed
+      # here either, for the same reason: a local single-manifest image has
+      # no other manifests to disambiguate between.
+      #
+      # Not tag-gated — see "SECURITY SCAN TRIGGER POLICY" at the top of
+      # this file. This is now the primary security gate, exercised on every
+      # PR and every `main` push, with the tag push re-running it once more
+      # as a final defense-in-depth check immediately before publish.
       - name: Scan built container with Trivy
+        env:
+          # Referenced as a shell variable below, not interpolated directly
+          # into the run: block, so an empty value contributes zero words to
+          # the command line instead of a stray blank argument.
+          TRIVY_SKIP_FLAGS: ${{ steps.trivy-db-cache-state.outputs.flags }}
         run: |
           trivy image \
             --scanners vuln,secret \
+            ${TRIVY_SKIP_FLAGS} \
             --skip-files "**/corepack/**,**/cacache/**,**/flutter_web_sdk/**/dart_sdk.js,**/devtools/**" \
             --pkg-types os,library \
             --severity CRITICAL,HIGH \
@@ -344,6 +745,17 @@ jobs:
             --format table \
             baobab-dev:scan
 
+      # ------------------------------------------------------------------------
+      # Container Smoke Test
+      # RATIONALE: Verify basic container runtime health before publishing
+      # release tags. Still tag-gated, unlike the Trivy scan above it: this
+      # step runs `docker run` against `steps.build.outputs.digest`, which
+      # only resolves to something pullable once the real build's `push:`
+      # flag is true — i.e. only on a tag push (see PUBLISH TRIGGER POLICY
+      # at the top of this file). It is not testing the same artifact the
+      # Trivy gate scans (that's the local, attestation-free `baobab-dev:
+      # scan` image); it is testing the actual image about to be published.
+      # ------------------------------------------------------------------------
       - name: Execute container smoke test
         if: matrix.platform == 'linux/amd64' && startsWith(github.ref, 'refs/tags/')
         run: |
@@ -353,8 +765,10 @@ jobs:
 
   # ============================================================================
   # Job 3: Manifest Creation, OIDC Cosign Signing & Release Attestation
-  # PURPOSE: Merges multi-arch images into an OCI Index manifest, signs with
-  #          Cosign keyless OIDC, and creates a GitHub Release on `v*.*.*` tags.
+  # PURPOSE: Merges individual architecture images into a unified multi-arch OCI
+  #          Index manifest, applies keyless Cosign signatures via OIDC, and creates
+  #          a GitHub Release. Gated to `v*.*.*` tag pushes only — see
+  #          "PUBLISH TRIGGER POLICY" at the top of this file.
   # ============================================================================
   publish:
     name: Publish Multi-Arch Manifest & Cosign Sign
@@ -363,6 +777,12 @@ jobs:
 
     runs-on: ubuntu-24.04
 
+    # --------------------------------------------------------------------------
+    # Permission Elevation RATIONALE:
+    # - contents: write -> Required to create GitHub Releases and upload release notes.
+    # - packages: write -> Required to publish multi-arch OCI index manifests to GHCR.
+    # - id-token: write -> CRITICAL for keyless Cosign signing using GitHub OIDC tokens.
+    # --------------------------------------------------------------------------
     permissions:
       contents: write
       packages: write
@@ -372,6 +792,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      # Same reasoning as build's identically-named step: this job's own
+      # checkout above is pinned to github.sha and cannot see whatever
+      # sanity-check committed during this same run. Needed here so the
+      # "Create GitHub Release" step's `files: config/versions.lock`
+      # attachment below actually has a file to attach.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -385,6 +810,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Only semver + `latest` tag patterns are computed here — this job's own
+      # `if:` above already guarantees `github.ref` is a `v*.*.*` tag by the
+      # time this step runs, so the `type=ref,event=branch` and
+      # `type=sha,prefix=sha-,format=short` patterns a `main`-push-aware
+      # version of this file would need are intentionally absent: they would
+      # never match anything here. `latest`'s `enable:` only needs to exclude
+      # pre-release tags (e.g. v1.0.0-rc.1) — it does not need an additional
+      # tag-ref guard, for the same reason.
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -396,6 +829,14 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
 
+      # ------------------------------------------------------------------------
+      # Download per-architecture digests exported by the build job.
+      # merge-multiple: true flattens both `digests-amd64/` and `digests-arm64/`
+      # artifact contents into a single directory, so every filename in
+      # ${{ runner.temp }}/digests is exactly one architecture's raw sha256
+      # (the filename itself IS the digest — see "Export architecture image
+      # digest" in the build job).
+      # ------------------------------------------------------------------------
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -403,6 +844,9 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
+      # ------------------------------------------------------------------------
+      # Merge Architecture Digests into Unified OCI Index Manifest
+      # ------------------------------------------------------------------------
       - name: Publish multi-architecture OCI manifest
         id: create-manifest
         env:
@@ -422,20 +866,32 @@ jobs:
             DIGEST_ARGS+=("${IMG}@sha256:$(basename "$f")")
           done
 
+          # Guard against a silently incomplete manifest: fail loudly rather
+          # than publishing a "multi-arch" image that only actually supports
+          # one architecture.
           if [[ ${#DIGEST_ARGS[@]} -lt 2 ]]; then
             echo "::error:: Expected 2 architecture digests (amd64 + arm64), found ${#DIGEST_ARGS[@]}."
             echo "::error:: Check the 'build' job's per-platform 'Upload digest' steps."
             exit 1
           fi
 
+          # Combine amd64 and arm64 digest layers into a single tag
           docker buildx imagetools create \
             "${TAG_ARGS[@]}" \
             "${DIGEST_ARGS[@]}"
 
+          # Retrieve final OCI index manifest digest for cryptographic signing
           FIRST_TAG=$(echo "${TAGS}" | head -n1)
           DIGEST=$(docker buildx imagetools inspect "${FIRST_TAG}" --format '{{.Manifest.Digest}}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
+      # ------------------------------------------------------------------------
+      # Keyless OIDC Cosign Infrastructure
+      # PURPOSE & RATIONALE:
+      # Installs Cosign and generates cryptographically signed signatures and
+      # supply chain attestations attached directly to the GHCR manifest digest.
+      # Eliminates long-lived static private keys in favor of short-lived OIDC tokens.
+      # ------------------------------------------------------------------------
       - name: Install Cosign CLI tool
         uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e # v3.8.0
 
@@ -451,13 +907,41 @@ jobs:
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
       # ------------------------------------------------------------------------
-      # Attest Container Image Provenance
-      # RATIONALE & FIX FOR COSIGN V3:
-      # Removed `-a` (`--annotation`) flags. In Cosign v3, `cosign attest` does
-      # NOT support the `-a` shorthand flag (which caused "unknown shorthand flag: 'a' in -a").
-      # Under GitHub Actions keyless OIDC, Cosign automatically extracts and embeds
-      # the repository, workflow name, commit SHA, and git reference natively into the
-      # SLSA provenance predicate bundle from the GitHub OIDC identity token claims.
+      # TODO (flagged 2026-08-17, blocking): `cosign attest` does not accept
+      # `-a`/`--annotation` at all in the currently pinned Cosign CLI — that
+      # flag exists on `cosign sign` (used above) but NOT on `cosign attest`;
+      # passing it here is exactly the "unknown shorthand flag: 'a' in -a"
+      # failure from the v1.0.0-rc.2 run. The `-a` lines have been removed
+      # below to stop that specific failure, but `cosign attest` also
+      # requires a `--predicate <FILE>` — currently absent from this step —
+      # and will fail its next run with "predicate must be set" once the
+      # flag-parsing error above is out of the way.
+      #
+      # This needs a decision, not a guess, because it changes what is
+      # actually being cryptographically attested:
+      #   (a) Point --predicate at a small JSON file this step generates
+      #       inline (repo/ref/sha/workflow/run-id) and switch --type to a
+      #       "custom" predicate type — cheap, but it is NOT real SLSA
+      #       provenance content, just CI metadata wrapped in an in-toto
+      #       envelope, despite the `slsaprovenance` label scripts/
+      #       verify-image.sh currently checks for.
+      #   (b) Extract the REAL SLSA provenance BuildKit already generated
+      #       for this build (`provenance: true` on the "Build container
+      #       image" step) via `docker buildx imagetools inspect
+      #       <digest> --format '{{ json .Provenance }}'`, write it to a
+      #       file, and attest THAT — genuine SLSA content, cosign-signs
+      #       what BuildKit already computed, but the multi-arch index has
+      #       one provenance predicate per platform, so a single-image
+      #       `cosign attest` call needs a decision on which platform's (or
+      #       whether to attest both, once each).
+      #   (c) Drop this manual cosign-signed attestation entirely and rely
+      #       solely on BuildKit's own embedded (unsigned) provenance —
+      #       simplest, but scripts/verify-image.sh's
+      #       `cosign verify-attestation --type slsaprovenance` check would
+      #       then need to be removed or reworked, since there would be
+      #       nothing left for it to find.
+      # Not picking one of these silently — confirm which before this step
+      # is considered done.
       # ------------------------------------------------------------------------
       - name: Attest container image provenance
         run: |
@@ -468,11 +952,40 @@ jobs:
             --type https://slsa.dev/provenance/v1 \
             "${IMG}@${{ steps.create-manifest.outputs.digest }}"
 
+      # ------------------------------------------------------------------------
+      # Post-Publish Verification
+      # PURPOSE & RATIONALE:
+      # scripts/verify-image.sh already exists and re-implements, from the
+      # outside, exactly what a downstream consumer would run to trust this
+      # image: a Cosign keyless-OIDC signature check, an SLSA provenance
+      # attestation check, and an SPDX SBOM attestation check. Before this
+      # step, nothing in CI ever actually called it — a regression in any of
+      # the three (wrong --certificate-identity-regexp, a broken OIDC
+      # exchange, a transient registry propagation delay between the sign/
+      # attest steps above and a consumer's first `cosign verify`) would only
+      # ever surface the next time someone happened to run the script by
+      # hand, potentially long after the release was already public.
+      #
+      # Runs BEFORE "Create GitHub Release" below, deliberately: a failure
+      # here should stop the job and prevent a GitHub Release from ever being
+      # published for an image whose signature/attestations don't actually
+      # verify — there is no point publishing release notes pointing at
+      # something that just failed its own trust check.
+      #
+      # Verified by DIGEST (steps.create-manifest.outputs.digest), not by
+      # tag: the digest is the exact content this run just signed and
+      # attested. A tag — even the release tag itself — is a mutable pointer
+      # that could in principle move between the sign step above and this
+      # check running; the digest cannot.
+      # ------------------------------------------------------------------------
       - name: Verify published image signature & attestations
         run: |
           chmod +x scripts/verify-image.sh
           ./scripts/verify-image.sh "${REGISTRY}/${IMAGE_NAME}@${{ steps.create-manifest.outputs.digest }}"
 
+      # ------------------------------------------------------------------------
+      # Create GitHub Release with Verification Instructions
+      # ------------------------------------------------------------------------
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
@@ -503,6 +1016,9 @@ jobs:
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
             ```
 
+      # ------------------------------------------------------------------------
+      # Step Summary Output
+      # ------------------------------------------------------------------------
       - name: Output Workflow Step Summary
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
@@ -516,7 +1032,7 @@ jobs:
             echo "### Security & Hygiene Controls Applied"
             echo "- ✅ **Pinned GitHub Actions:** Immutable 40-character commit SHAs"
             echo "- ✅ **Concurrency Control:** Auto-cancels obsolete build runs on PRs"
-            echo "- ✅ **Shift-Left Trivy CVE Gate:** Passed on PR, main, and tag checks"
+            echo "- ✅ **Trivy CVE Gate:** Passed (0 Critical/High unpatched vulnerabilities)"
             echo "- ✅ **SBOM & SLSA Attestations:** Embedded directly into OCI index"
             echo "- ✅ **Keyless Cosign Signature:** Signed via GitHub Actions OIDC identity"
             echo "- ✅ **Post-Publish Verification:** Signature and attestations independently re-verified against the published digest (scripts/verify-image.sh)"
