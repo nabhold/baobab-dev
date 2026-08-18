@@ -502,7 +502,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
           sbom: true
-          provenance: true
+          provenance: mode=max,version=v1
 
       # ------------------------------------------------------------------------
       # Export architecture image digest to a file, then ship it as a per-arch
