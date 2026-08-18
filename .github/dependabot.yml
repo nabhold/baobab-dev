@@ -1,28 +1,155 @@
-# .github/dependabot.yml
+# ==============================================================================
+# Baobab Enterprise Platform
+# Dependabot Configuration
+#
+# File: .github/dependabot.yml
+#
+# PURPOSE
+# -------
+# Automated dependency-drift detection and update PRs for the two ecosystems
+# that actually need Dependabot's help in this repository.
+#
+# ECOSYSTEMS COVERED
+# -------------------
+#   1. github-actions — Action versions used across every workflow in
+#      .github/workflows/.
+#   2. uv              — Python tooling dependencies declared in
+#      pyproject.toml / uv.lock (dev + docs dependency groups: pytest,
+#      pyyaml, requests, zensical).
+#
+# ECOSYSTEMS DELIBERATELY EXCLUDED
+# ----------------------------------
+#   • docker — NOT enabled. config/versions.yaml -> config/resolve.sh ->
+#     config/versions.lock is this project's single source of truth for
+#     every toolchain and runtime version, including the Ubuntu base image
+#     (platform.ubuntu.version). Dependabot's docker ecosystem can only see
+#     the Dockerfile's own `ARG UBUNTU_VERSION=26.04` default — it has no
+#     visibility into versions.lock, which is sourced at RUN time via shell,
+#     not a Dockerfile ARG/FROM Dependabot can parse. Enabling it would
+#     create a second, competing mechanism for deciding "what Ubuntu version
+#     are we on" that isn't reconciled with versions.yaml. Base image bumps
+#     remain a deliberate manual step: edit versions.yaml's
+#     platform.ubuntu.version AND the Dockerfile's ARG default together, in
+#     the same PR, as documented in the Dockerfile's own header comment.
+#
+#   • npm — NOT enabled. This repository has no package.json of its own;
+#     Node.js/npm/pnpm are runtime tooling INSIDE the published container
+#     image (governed by versions.yaml/resolve.sh, same as Python/Postgres/
+#     the CLI utilities), not a JavaScript project Dependabot would manage
+#     here. Re-add this entry if/when the docs site or tooling ever gains
+#     its own package.json.
+#
+# CADENCE
+# --------
+# Weekly, Tuesday 09:00 UTC — deliberately offset from
+# .github/workflows/update-lockfile.yml's Monday 00:00 UTC schedule, so the
+# container-toolchain lockfile PR and Dependabot's own PRs land on different
+# days rather than both hitting review the same morning.
+#
+# GROUPING
+# ---------
+# Both ecosystems batch same-type updates into a single PR (all GitHub
+# Actions together; Python minor/patch together, separate from major, separate
+# again from security). This trades a small loss of per-dependency PR
+# granularity for a much smaller weekly review burden — consistent with the
+# existing "github-actions: patterns: ['*']" grouping already used in this
+# file before this revision.
+#
+# ⚠️ IGNORE-RULE CAVEAT (zensical)
+# -----------------------------------
+# The `ignore` entry for zensical below has NO `versions:` qualifier, which
+# means it suppresses ALL updates to that dependency — including security
+# updates — not just routine version bumps. This is an intentional,
+# time-boxed trade-off while the docs migration (Zensical/MkDocs Material
+# overrides, see project memory on hero.html/home.html/footer.html) is in
+# flight, not a permanent policy. Revisit this ignore rule once that
+# migration lands, and consider scoping it to a version range instead of an
+# unconditional block if it needs to persist longer than expected.
+# ==============================================================================
+
 version: 2
+
 updates:
-  # Enable Dependabot updates for GitHub Actions
+
+  # ============================================================================
+  # Ecosystem 1: GitHub Actions
+  # ============================================================================
   - package-ecosystem: "github-actions"
-    directory: "/" # Scans all workflows in .github/workflows
+    directory: "/"           # Scans every workflow in .github/workflows/
+
     schedule:
-      interval: "weekly" # Options: "daily", "weekly", or "monthly"
-      day: "monday"
+      interval: "weekly"
+      day: "tuesday"
       time: "09:00"
       timezone: "UTC"
 
-    # Optional: Group action updates into a single PR to reduce notification noise
+    # Every action pin in this repo is a full 40-character commit SHA
+    # (org-wide policy — see publish.yml, pages.yml, greetings.yml,
+    # update-lockfile.yml headers). Dependabot updates SHA-pinned actions by
+    # bumping to the new commit's SHA and refreshing the trailing "# vX.Y.Z"
+    # comment, which preserves that policy rather than fighting it.
     groups:
       github-actions:
         patterns:
           - "*"
 
-    # Optional: Customize the commit message format
     commit-message:
       prefix: "build(deps)"
       include: "scope"
 
-    # Optional: Open PRs with specific reviewers or labels
     labels:
       - "dependencies"
       - "github-actions"
+
+    open-pull-requests-limit: 10
+
+  # ============================================================================
+  # Ecosystem 2: uv (pyproject.toml / uv.lock)
+  # ============================================================================
+  - package-ecosystem: "uv"
+    directory: "/"           # pyproject.toml + uv.lock live at repo root
+
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "UTC"
+
+    groups:
+      # Routine, low-risk bumps — merge without much ceremony.
+      python-minor-patch:
+        applies-to: "version-updates"
+        update-types:
+          - "minor"
+          - "patch"
+
+      # Major version bumps — kept in their own PR since these are the ones
+      # most likely to need a changelog read and a manual `uv lock --upgrade`
+      # sanity check before merge (pytest 9->10, zensical 0.x->1.x, etc.).
+      python-major:
+        applies-to: "version-updates"
+        update-types:
+          - "major"
+
+      # Security advisories are never bundled into a routine batch — kept as
+      # their own group so a CVE fix isn't waiting behind an unrelated major
+      # version review.
+      python-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+
+    # See "⚠️ IGNORE-RULE CAVEAT" in the file header above — this also blocks
+    # security updates for zensical, not just version-update PRs.
+    ignore:
+      - dependency-name: "zensical"
+
+    commit-message:
+      prefix: "build(deps)"
+      include: "scope"
+
+    labels:
+      - "dependencies"
+      - "python"
+
     open-pull-requests-limit: 10
