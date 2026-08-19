@@ -920,6 +920,21 @@ jobs:
             --format '{{ json . }}' | jq '.'
           echo "::endgroup::"
       # ------------------------------------------------------------------------
+      # NEW: crane (google/go-containerregistry) fetches raw OCI blobs by digest — buildx has no equivalent, and it's the tool Docker's own docs use for the manual attestation-extraction workaround (docker/docs#23366).
+      - name: Install crane CLI tool
+        env:
+          CRANE_VERSION: "0.21.9"
+          CRANE_SHA256: "5c16d8ddb971cb1d5e6ed8b1e743da8224414eeba2c2762d8f1a61b2f095699e"
+        run: |
+          set -euo pipefail
+          ASSET="go-containerregistry_Linux_x86_64.tar.gz"
+          curl -fsSL -o "${ASSET}" "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/${ASSET}"
+          echo "${CRANE_SHA256}  ${ASSET}" | sha256sum -c -
+          tar -xzf "${ASSET}" crane
+          chmod +x crane
+          sudo mv crane /usr/local/bin/crane
+          crane version
+      # ---------------
       # Extract per-platform SLSA provenance predicates
       # PURPOSE & RATIONALE (Path A, decided 2026-08-18 — see prior
       # investigation in file history for the two alternatives that were
@@ -956,6 +971,7 @@ jobs:
       # satisfy scripts/verify-image.sh's single `cosign verify-attestation`
       # check).
       # ------------------------------------------------------------------------
+      # REWRITTEN: buildx's convenience `.Provenance` map came back empty for BOTH platforms after imagetools create (confirmed via the debug step above), even though the raw attestation manifests are present and correctly linked in the merged index — a known gap in the create+inspect roundtrip (see docker/docs#23366). This walks the raw OCI index manually — Docker's own documented workaround — to fetch each platform's REAL BuildKit-generated in-toto statement, preferring the SLSA v1.0 predicate layer and falling back to v0.2 only if v1 is genuinely absent. Never fabricates a predicate.
       - name: Extract per-platform SLSA provenance predicates
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -963,27 +979,63 @@ jobs:
           set -euo pipefail
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
+          MANIFEST_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+
           for PLATFORM in linux/amd64 linux/arm64; do
+            ARCH="${PLATFORM#linux/}"
             FILE="provenance-$(basename "${PLATFORM}").json"
+            TYPE_FILE="provenance-type-$(basename "${PLATFORM}").txt"
 
-            # Extract the in-toto statement from the OCI index and isolate the inner SLSA predicate object
-            docker buildx imagetools inspect "${IMG}@${DIGEST}" \
-              --format "{{ json (index .Provenance \"${PLATFORM}\") }}" \
-              | jq '.predicate' > "${FILE}"
+            # Locate this platform's own image-manifest digest within the merged index.
+            IMAGE_DIGEST=$(echo "${MANIFEST_JSON}" | jq -r --arg arch "${ARCH}" \
+              '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
 
-            # Fail loudly rather than attesting an empty/null predicate: a
-            # missing provenance entry for a platform that DID publish a
-            # digest above is a real regression in the build job (e.g. the
-            # `provenance: true` build-arg silently dropped) worth stopping
-            # the release for, not silently cosign-signing an empty
-            # statement.
-            if [[ ! -s "${FILE}" ]] || [[ "$(cat "${FILE}")" == "null" ]]; then
-              echo "::error:: No SLSA provenance predicate found for ${PLATFORM} on ${IMG}@${DIGEST}."
+            if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "null" ]]; then
+              echo "::error:: No image manifest found for ${PLATFORM} in the merged index ${IMG}@${DIGEST}."
+              exit 1
+            fi
+
+            # Locate the sibling attestation-manifest that references this platform's image manifest.
+            ATTESTATION_DIGEST=$(echo "${MANIFEST_JSON}" | jq -r --arg ref "${IMAGE_DIGEST}" \
+              '.manifests[] | select(.annotations."vnd.docker.reference.type" == "attestation-manifest" and .annotations."vnd.docker.reference.digest" == $ref) | .digest')
+
+            if [[ -z "${ATTESTATION_DIGEST}" || "${ATTESTATION_DIGEST}" == "null" ]]; then
+              echo "::error:: No attestation manifest found for ${PLATFORM} (image digest ${IMAGE_DIGEST}) on ${IMG}@${DIGEST}."
               echo "::error:: Check the 'build' job's 'Build container image with SBOM & SLSA Provenance' step."
               exit 1
             fi
-          done
 
+            ATTESTATION_RAW=$(docker buildx imagetools inspect "${IMG}@${ATTESTATION_DIGEST}" --raw)
+
+            # Prefer the real SLSA v1.0 in-toto layer; fall back to v0.2 only if BuildKit genuinely didn't emit v1.
+            PREDICATE_DIGEST=$(echo "${ATTESTATION_RAW}" | jq -r \
+              '.layers[] | select(.annotations."in-toto.io/predicate-type" == "https://slsa.dev/provenance/v1") | .digest')
+            PREDICATE_TYPE="slsaprovenance1"
+
+            if [[ -z "${PREDICATE_DIGEST}" || "${PREDICATE_DIGEST}" == "null" ]]; then
+              PREDICATE_DIGEST=$(echo "${ATTESTATION_RAW}" | jq -r \
+                '.layers[] | select(.annotations."in-toto.io/predicate-type" == "https://slsa.dev/provenance/v0.2") | .digest')
+              PREDICATE_TYPE="slsaprovenance"
+              if [[ -n "${PREDICATE_DIGEST}" && "${PREDICATE_DIGEST}" != "null" ]]; then
+                echo "::warning:: ${PLATFORM}: SLSA v1.0 provenance layer not found; falling back to v0.2."
+              fi
+            fi
+
+            if [[ -z "${PREDICATE_DIGEST}" || "${PREDICATE_DIGEST}" == "null" ]]; then
+              echo "::error:: No SLSA provenance layer (v1.0 or v0.2) found in attestation manifest ${IMG}@${ATTESTATION_DIGEST} for ${PLATFORM}."
+              echo "::error:: Check the 'build' job's 'provenance: mode=max,version=v1' setting."
+              exit 1
+            fi
+
+            # Fetch the real in-toto statement blob and isolate the SLSA predicate object.
+            crane blob "${IMG}@${PREDICATE_DIGEST}" | jq '.predicate' > "${FILE}"
+            echo "${PREDICATE_TYPE}" > "${TYPE_FILE}"
+
+            if [[ ! -s "${FILE}" ]] || [[ "$(cat "${FILE}")" == "null" ]]; then
+              echo "::error:: Fetched in-toto statement for ${PLATFORM} but its .predicate field was empty/null (blob ${PREDICATE_DIGEST})."
+              exit 1
+            fi
+          done
       # ------------------------------------------------------------------------
       # Keyless OIDC Cosign Infrastructure
       # PURPOSE & RATIONALE:
@@ -1028,6 +1080,7 @@ jobs:
       # genuine. scripts/verify-image.sh has been updated to check
       # `--type slsaprovenance1` to match (see that file's own change log).
       # ------------------------------------------------------------------------
+      # UPDATED: cosign needs the predicate type this run actually resolved per platform (v1, or the rare v0.2 fallback), read from the sidecar file the extraction step above wrote — no longer hardcoded to slsaprovenance1.
       - name: Attest container image provenance
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -1037,13 +1090,14 @@ jobs:
 
           for PLATFORM in linux/amd64 linux/arm64; do
             FILE="provenance-$(basename "${PLATFORM}").json"
+            TYPE_FILE="provenance-type-$(basename "${PLATFORM}").txt"
+            PREDICATE_TYPE="$(cat "${TYPE_FILE}")"
 
             cosign attest --yes \
-              --type slsaprovenance1 \
+              --type "${PREDICATE_TYPE}" \
               --predicate "${FILE}" \
               "${IMG}@${DIGEST}"
           done
-
       # ------------------------------------------------------------------------
       # Post-Publish Verification
       # PURPOSE & RATIONALE:
