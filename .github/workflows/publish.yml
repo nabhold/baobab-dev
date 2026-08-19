@@ -468,7 +468,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
+      
       - name: Extract OCI Metadata & Labels
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -505,6 +505,20 @@ jobs:
           # Instruct BuildKit to emit SLSA v1.0 schema inside the in-toto predicate
           provenance: mode=max,version=v1
 
+      
+            # DEBUG: confirms whether BuildKit actually generated provenance at build time, before any merge step touches it.
+      - name: Debug — inspect provenance immediately after build
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "::group::buildx version (build job)"
+          docker buildx version
+          echo "::endgroup::"
+          echo "::group::Provenance for ${{ steps.build.outputs.digest }}"
+          docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" \
+            --format '{{ json . }}' | jq '.'
+          echo "::endgroup::"
+      
       # ------------------------------------------------------------------------
       # Export architecture image digest to a file, then ship it as a per-arch
       # artifact. RATIONALE: GitHub Actions matrix jobs do not reliably merge
@@ -819,6 +833,11 @@ jobs:
       # never match anything here. `latest`'s `enable:` only needs to exclude
       # pre-release tags (e.g. v1.0.0-rc.1) — it does not need an additional
       # tag-ref guard, for the same reason.
+
+      # FIX: publish job previously had no Buildx setup, relying on the runner's older bundled buildx CLI for imagetools create/inspect — the likely cause of missing provenance in the merged index.
+      - name: Setup Docker Buildx Engine
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -886,6 +905,20 @@ jobs:
           DIGEST=$(docker buildx imagetools inspect "${FIRST_TAG}" --format '{{.Manifest.Digest}}')
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
+      
+      # -------------
+      # DEBUG: confirms whether provenance survives the imagetools create merge, now that publish has its own buildx set up.
+      - name: Debug — inspect merged manifest before extracting provenance
+        env:
+          DIGEST: ${{ steps.create-manifest.outputs.digest }}
+        run: |
+          echo "::group::buildx version (publish job)"
+          docker buildx version
+          echo "::endgroup::"
+          echo "::group::Full imagetools inspect of merged index"
+          docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}@${DIGEST}" \
+            --format '{{ json . }}' | jq '.'
+          echo "::endgroup::"
       # ------------------------------------------------------------------------
       # Extract per-platform SLSA provenance predicates
       # PURPOSE & RATIONALE (Path A, decided 2026-08-18 — see prior
