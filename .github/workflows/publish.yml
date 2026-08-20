@@ -1099,6 +1099,81 @@ jobs:
               "${IMG}@${DIGEST}"
           done
       # ------------------------------------------------------------------------
+      # Extract & Attest SPDX SBOM
+      # PURPOSE & RATIONALE:
+      # Same manual-extraction technique as SLSA provenance above, since
+      # buildx's `.SBOM` convenience map has the identical create+inspect
+      # roundtrip gap as `.Provenance` (same root cause, same workaround).
+      # BuildKit's SBOM layer uses predicate type "https://spdx.dev/Document"
+      # exactly (confirmed via sigstore/cosign#3030) — no version-suffix
+      # ambiguity like SLSA v1/v0.2, so an exact match is safe here.
+      # ------------------------------------------------------------------------
+      - name: Extract per-platform SPDX SBOM predicates
+        env:
+          DIGEST: ${{ steps.create-manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          IMG="${REGISTRY}/${IMAGE_NAME}"
+
+          MANIFEST_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+
+          for PLATFORM in linux/amd64 linux/arm64; do
+            ARCH="${PLATFORM#linux/}"
+            FILE="sbom-$(basename "${PLATFORM}").json"
+
+            IMAGE_DIGEST=$(echo "${MANIFEST_JSON}" | jq -r --arg arch "${ARCH}" \
+              '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
+
+            if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "null" ]]; then
+              echo "::error:: No image manifest found for ${PLATFORM} in the merged index ${IMG}@${DIGEST}."
+              exit 1
+            fi
+
+            ATTESTATION_DIGEST=$(echo "${MANIFEST_JSON}" | jq -r --arg ref "${IMAGE_DIGEST}" \
+              '.manifests[] | select(.annotations."vnd.docker.reference.type" == "attestation-manifest" and .annotations."vnd.docker.reference.digest" == $ref) | .digest')
+
+            if [[ -z "${ATTESTATION_DIGEST}" || "${ATTESTATION_DIGEST}" == "null" ]]; then
+              echo "::error:: No attestation manifest found for ${PLATFORM} (image digest ${IMAGE_DIGEST}) on ${IMG}@${DIGEST}."
+              exit 1
+            fi
+
+            ATTESTATION_RAW=$(docker buildx imagetools inspect "${IMG}@${ATTESTATION_DIGEST}" --raw)
+
+            PREDICATE_DIGEST=$(echo "${ATTESTATION_RAW}" | jq -r \
+              '.layers[] | select(.annotations."in-toto.io/predicate-type" == "https://spdx.dev/Document") | .digest')
+
+            if [[ -z "${PREDICATE_DIGEST}" || "${PREDICATE_DIGEST}" == "null" ]]; then
+              echo "::error:: No SPDX SBOM layer found in attestation manifest ${IMG}@${ATTESTATION_DIGEST} for ${PLATFORM}."
+              echo "::error:: Check the 'build' job's 'sbom: true' setting."
+              exit 1
+            fi
+
+            crane blob "${IMG}@${PREDICATE_DIGEST}" | jq '.predicate' > "${FILE}"
+
+            if [[ ! -s "${FILE}" ]] || [[ "$(cat "${FILE}")" == "null" ]]; then
+              echo "::error:: Fetched in-toto statement for ${PLATFORM} but its .predicate field was empty/null (blob ${PREDICATE_DIGEST})."
+              exit 1
+            fi
+          done
+
+      # NEW: attest the two real, per-platform SPDX SBOMs extracted above, mirroring the provenance attest step (two attestations coexist on the same digest; cosign appends rather than overwrites).
+      - name: Attest container image SBOM
+        env:
+          DIGEST: ${{ steps.create-manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          IMG="${REGISTRY}/${IMAGE_NAME}"
+
+          for PLATFORM in linux/amd64 linux/arm64; do
+            FILE="sbom-$(basename "${PLATFORM}").json"
+
+            cosign attest --yes \
+              --type spdxjson \
+              --predicate "${FILE}" \
+              "${IMG}@${DIGEST}"
+          done
+      
+      # -----------------------------------------------------
       # Post-Publish Verification
       # PURPOSE & RATIONALE:
       # scripts/verify-image.sh already exists and re-implements, from the
