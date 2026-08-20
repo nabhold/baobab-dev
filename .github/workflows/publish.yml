@@ -1045,18 +1045,24 @@ jobs:
       # ------------------------------------------------------------------------
       - name: Install Cosign CLI tool
         uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e # v3.8.0
+      
+      # NEW: make the shared cosign-retry wrapper executable once, here — all three cosign-calling steps below depend on it.
+      - name: Make cosign-retry.sh executable
+        run: chmod +x scripts/cosign-retry.sh  
 
+      # SIMPLIFIED: retry logic now lives in scripts/cosign-retry.sh, shared with the two attest steps below.
       - name: Sign container image via Keyless OIDC Identity
+        env:
+          DIGEST: ${{ steps.create-manifest.outputs.digest }}
         run: |
           set -euo pipefail
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
-          cosign sign --yes \
+          scripts/cosign-retry.sh cosign sign --yes \
             -a "repo=${{ github.repository }}" \
             -a "workflow=${{ github.workflow }}" \
             -a "sha=${{ github.sha }}" \
-            "${IMG}@${{ steps.create-manifest.outputs.digest }}"
-
+            "${IMG}@${DIGEST}"
       # ------------------------------------------------------------------------
       # Attest container image provenance
       # PURPOSE & RATIONALE:
@@ -1081,6 +1087,7 @@ jobs:
       # `--type slsaprovenance1` to match (see that file's own change log).
       # ------------------------------------------------------------------------
       # UPDATED: cosign needs the predicate type this run actually resolved per platform (v1, or the rare v0.2 fallback), read from the sidecar file the extraction step above wrote — no longer hardcoded to slsaprovenance1.
+      # SIMPLIFIED: retry logic now lives in scripts/cosign-retry.sh, shared with sign and SBOM attest.
       - name: Attest container image provenance
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -1093,7 +1100,7 @@ jobs:
             TYPE_FILE="provenance-type-$(basename "${PLATFORM}").txt"
             PREDICATE_TYPE="$(cat "${TYPE_FILE}")"
 
-            cosign attest --yes \
+            scripts/cosign-retry.sh cosign attest --yes \
               --type "${PREDICATE_TYPE}" \
               --predicate "${FILE}" \
               "${IMG}@${DIGEST}"
@@ -1158,10 +1165,22 @@ jobs:
 
       # NEW: attest the two real, per-platform SPDX SBOMs extracted above, mirroring the provenance attest step (two attestations coexist on the same digest; cosign appends rather than overwrites).
       # NEW: rekor.sigstore.dev occasionally has transient outages; cosign already retries 4x internally before giving up (see live failure log), so this wraps the whole invocation in a further bounded retry rather than failing the release on a momentary blip. COSIGN_RETRY_COUNT/COSIGN_RETRY_DELAY are not real cosign flags — verified against cosign's source/docs — so retry logic must live in this loop, not in env vars.
+      # SIMPLIFIED: retry logic now lives in scripts/cosign-retry.sh, shared with sign and provenance attest.
       - name: Attest container image SBOM
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
         run: |
+          set -euo pipefail
+          IMG="${REGISTRY}/${IMAGE_NAME}"
+
+          for PLATFORM in linux/amd64 linux/arm64; do
+            FILE="sbom-$(basename "${PLATFORM}").json"
+
+            scripts/cosign-retry.sh cosign attest --yes \
+              --type spdxjson \
+              --predicate "${FILE}" \
+              "${IMG}@${DIGEST}"
+          done
           set -euo pipefail
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
