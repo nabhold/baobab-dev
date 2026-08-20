@@ -1,85 +1,56 @@
 {
   "name": "Baobab Enterprise Platform",
-  // --------------------------------------------------------------------------
-  // Image source
-  //
-  // ghcr.io/nabhold/baobab-dev:1.0.0 is the official pre-built image tagged and
-  // published by .github/workflows/publish.yml following pre-release audit.
-  //
-  // Using explicit tag pinning ('1.0.0') instead of ':latest' guarantees:
-  //  1. Exact deterministic environment parity across all developer workstations & CI.
-  //  2. Immutable, reproducible builds without unexpected upstream breakage.
-  //  3. Strict alignment with verified version manifests (config/versions.lock).
-  //
-  // If local Dockerfile iteration or debugging is required prior to image
-  // publishing, comment out "image" below and uncomment the "build" block.
-  // --------------------------------------------------------------------------
+
+  // Pinned to v1.0.0 (not :latest) for deterministic, reproducible parity
+  // with config/versions.lock across all workstations and CI. Published by
+  // .github/workflows/publish.yml after Cosign sign/attest + Trivy gate.
+  // NOTE: GHCR does not enforce tag immutability server-side — this tag is
+  // "immutable" only by this repo's release policy. For registry-enforced
+  // immutability, pin by digest instead/in addition:
+  //   "image": "ghcr.io/nabhold/baobab-dev:1.0.0@sha256:<digest>"
+  // (get <digest> from the v1.0.0 GitHub Release notes, or
+  // `docker buildx imagetools inspect ghcr.io/nabhold/baobab-dev:1.0.0`).
   "image": "ghcr.io/nabhold/baobab-dev:1.0.0",
   // "build": {
-  //   // Repo root, not .devcontainer — the Dockerfile COPYs config/ and
-  //   // scripts/ from the build context root (see Dockerfile.txt sections
-  //   // 2, 13), so the context must be one level up from .devcontainer/.
+  //   // Repo root, not .devcontainer — Dockerfile COPYs config/ and scripts/
+  //   // from the build context root.
   //   "context": "..",
   //   "dockerfile": "./docker/Dockerfile",
-  //   // BUILD_DATE/VERSION/REVISION are pure metadata (see Dockerfile.txt
-  //   // §"Build ARGs") — this build never derives them from git, since
-  //   // devcontainer.json's "args" field is static JSON, not a shell context.
-  //   // These placeholders make it obvious in `baobab-summary` / image labels
-  //   // that this is a local test build, not a CI-published one. BUILD_DATE is
-  //   // intentionally omitted; it will show "Unknown" via the script's own
-  //   // fallback, which is the correct signal for a non-CI build.
-  //   "args": {
-  //     "VERSION": "0.0.0-local",
-  //     "REVISION": "local-build"
-  //   }
+  //   // Static placeholders (devcontainer.json "args" can't derive from git);
+  //   // BUILD_DATE omitted so baobab-summary/image labels correctly show
+  //   // "Unknown", signaling a local test build, not a CI-published one.
+  //   "args": { "VERSION": "0.0.0-local", "REVISION": "local-build" }
   // },
 
-  // --------------------------------------------------------------------------
-  // Host Requirements (Hardware Allocation for Cloud Environments)
-  //
-  // Running full-stack services (Django, FastAPI, Next.js, PostgreSQL, Redis,
-  // MinIO) alongside Docker-outside-of-Docker requires sufficient host compute.
-  // Declaring hostRequirements ensures GitHub Codespaces provisions a standard
-  // 4-core, 8GB RAM machine tier minimum, preventing runtime OOM kills and
-  // CPU bottlenecking during multi-container orchestrations.
-  // --------------------------------------------------------------------------
+  // 4 vCPU / 8GB RAM / 32GB storage minimum — Django, FastAPI, Next.js,
+  // PostgreSQL, Redis, and MinIO alongside docker-outside-of-docker need it.
   "hostRequirements": {
     "cpus": 4,
     "memory": "8gb",
     "storage": "32gb"
   },
 
-  "runArgs": [
-    "--init",
-    "--cap-add=SYS_PTRACE",
-    "--security-opt",
-    "seccomp=unconfined"
-  ],
+  // Spec-level (cross-orchestrator) equivalents of `docker run --init`,
+  // `--cap-add=SYS_PTRACE`, `--security-opt seccomp=unconfined` — portable
+  // across Docker CLI, Compose, and non-Docker dev container hosts, unlike
+  // raw runArgs. SYS_PTRACE + unconfined seccomp are for native debuggers
+  // (Go/Rust/C++ via delve/gdb); init reaps zombie processes.
+  "init": true,
+  "capAdd": ["SYS_PTRACE"],
+  "securityOpt": ["seccomp=unconfined"],
+
   "containerEnv": {
     "TZ": "UTC"
   },
   "remoteUser": "vscode",
   "updateRemoteUserUID": true,
 
-  // --------------------------------------------------------------------------
-  // Workspace Mount
-  //
-  // Preserves explicit bind properties and performance flags (`consistency=cached`)
-  // for local macOS/Linux Docker Desktop execution, while allowing devcontainer
-  // implementations to adapt target paths automatically.
-  // --------------------------------------------------------------------------
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
 
-  // --------------------------------------------------------------------------
-  // Bind Mounts & Volume Persistence
-  //
-  // 1. Host Docker Socket: Shadow-mounted at docker-host.sock so the
-  //    docker-outside-of-docker feature can wire permissions and symlinks.
-  // 2. Named Cache Volumes: Mounting pip and node_modules as isolated Docker
-  //    volumes guarantees package caches survive devcontainer rebuilds,
-  //    substantially speeding up dependency resolution and reinstallations.
-  // --------------------------------------------------------------------------
+  // 1. Host Docker socket, shadow-mounted so docker-outside-of-docker can
+  //    wire permissions/symlinks. 2. Named volumes for pip/node_modules so
+  //    caches survive rebuilds.
   "mounts": [
     "source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind",
     "source=baobab-pip-cache,target=/home/vscode/.cache/pip,type=volume",
@@ -87,101 +58,46 @@
   ],
 
   "features": {
-    // moby: false — the image already bakes in docker-ce-cli,
-    // docker-compose-plugin, and docker-buildx-plugin (Dockerfile.txt §7).
-    // This feature is used ONLY for the docker-host.sock -> docker.sock
-    // permission/symlink wiring described above, not for installing Docker
-    // itself.
+    // moby:false — the image already bakes in docker-ce-cli/buildx/compose;
+    // this feature only wires docker-host.sock -> docker.sock permissions.
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "moby": false,
       "dockerDashComposeVersion": "v2"
     }
-    // github-cli feature intentionally removed: `gh` is already installed
-    // in the image via apt (Dockerfile.txt §8). Re-declaring it here only
-    // adds provisioning time on every Codespace create for no benefit, and
-    // risks silently installing a newer/unpinned `gh` than the one
-    // config/versions.lock resolved for the image build.
+    // github-cli intentionally NOT declared here: `gh` ships in the image
+    // via apt already; re-declaring would add provisioning time and risk
+    // an unpinned `gh` version diverging from config/versions.lock.
   },
 
-  "forwardPorts": [
-    8000,
-    8001,
-    3000,
-    5432,
-    6379,
-    9000,
-    9001,
-    80,
-    443
-  ],
+  "forwardPorts": [8000, 8001, 3000, 5432, 6379, 9000, 9001, 80, 443],
 
-  // --------------------------------------------------------------------------
-  // Port Attributes & Visibility Security
-  //
-  // Explicitly assigns labels, auto-forwarding behaviors, and visibility rules.
-  // Specifying `"visibility": "private"` guarantees backend and database ports
-  // are never exposed publicly or organization-wide by default when running on
-  // cloud-hosted environments like GitHub Codespaces.
-  // --------------------------------------------------------------------------
+  // Explicit labels/visibility per service. All private by default so
+  // backend/DB ports are never exposed publicly on Codespaces.
   "portsAttributes": {
-    "8000": {
-      "label": "Django / DRF",
-      "onAutoForward": "notify",
-      "visibility": "private"
-    },
-    "8001": {
-      "label": "FastAPI",
-      "onAutoForward": "notify",
-      "visibility": "private"
-    },
-    "3000": {
-      "label": "Next.js",
-      "onAutoForward": "openPreview",
-      "visibility": "private"
-    },
-    "5432": {
-      "label": "PostgreSQL",
-      "onAutoForward": "silent",
-      "visibility": "private"
-    },
-    "6379": {
-      "label": "Redis",
-      "onAutoForward": "silent",
-      "visibility": "private"
-    },
-    "9000": {
-      "label": "MinIO API",
-      "onAutoForward": "silent",
-      "visibility": "private"
-    },
-    "9001": {
-      "label": "MinIO Console",
-      "onAutoForward": "notify",
-      "visibility": "private"
-    },
-    "80": {
-      "label": "Traefik / Nginx (HTTP)",
-      "onAutoForward": "silent",
-      "visibility": "private"
-    },
-    "443": {
-      "label": "Traefik / Nginx (HTTPS)",
-      "onAutoForward": "silent",
-      "visibility": "private"
-    }
+    "8000": { "label": "Django / DRF", "onAutoForward": "notify", "visibility": "private" },
+    "8001": { "label": "FastAPI", "onAutoForward": "notify", "visibility": "private" },
+    "3000": { "label": "Next.js", "onAutoForward": "openPreview", "visibility": "private" },
+    "5432": { "label": "PostgreSQL", "onAutoForward": "silent", "visibility": "private" },
+    "6379": { "label": "Redis", "onAutoForward": "silent", "visibility": "private" },
+    "9000": { "label": "MinIO API", "onAutoForward": "silent", "visibility": "private" },
+    "9001": { "label": "MinIO Console", "onAutoForward": "notify", "visibility": "private" },
+    "80": { "label": "Traefik / Nginx (HTTP)", "onAutoForward": "silent", "visibility": "private" },
+    "443": { "label": "Traefik / Nginx (HTTPS)", "onAutoForward": "silent", "visibility": "private" }
+  },
+  // Catch-all for any port forwarded outside the explicit list above (e.g. a
+  // debugger or ad-hoc dev server) — keeps the same private-by-default
+  // guarantee instead of falling back to the org/repo Codespaces default.
+  "otherPortsAttributes": {
+    "onAutoForward": "silent",
+    "visibility": "private"
   },
 
-  // --------------------------------------------------------------------------
-  // Lifecycle Hooks & Prebuild Optimization
-  //
-  // 1. updateContentCommand: Prebuild hook executed during Codespace prebuild
-  //    generation. Downloads dynamic package dependencies before developer attach.
-  // 2. onCreateCommand / postCreateCommand: Sequential lifecycle tasks executed
-  //    during container creation.
-  // 3. waitFor: Delays editor connection until `postCreateCommand` completes,
-  //    ensuring developers enter a fully provisioned workspace.
-  // 4. postStartCommand: Executes `baobab-summary` status CLI on every boot.
-  // --------------------------------------------------------------------------
+  // updateContentCommand runs during Codespaces prebuild generation (and on
+  // every content update) and IS captured in the prebuild snapshot;
+  // onCreateCommand/postCreateCommand run once per codespace creation;
+  // postStartCommand runs on every boot/resume. waitFor=postCreateCommand
+  // (not the spec default of updateContentCommand) blocks editor connection
+  // until the full chain finishes, so developers land in a ready workspace.
   "updateContentCommand": "bash scripts/post-create.sh --stage=update-content",
   "onCreateCommand": "bash scripts/post-create.sh --stage=on-create",
   "postCreateCommand": "bash scripts/post-create.sh --stage=post-create",
@@ -189,20 +105,9 @@
   "waitFor": "postCreateCommand",
 
   "customizations": {
-    // ------------------------------------------------------------------------
-    // Codespaces-Specific UX Controls
-    // Automatically opens relevant entrypoint files upon cloud workspace creation.
-    // ------------------------------------------------------------------------
     "codespaces": {
-      "openFiles": [
-        "README.md",
-        "docker-compose.yml"
-      ]
+      "openFiles": ["README.md", "docker-compose.yml"]
     },
-
-    // ------------------------------------------------------------------------
-    // VS Code Global Settings & Recommended Extensions
-    // ------------------------------------------------------------------------
     "vscode": {
       "extensions": [
         "eamodio.gitlens",
@@ -231,10 +136,7 @@
       ],
       "settings": {
         "editor.formatOnSave": true,
-        "editor.rulers": [
-          88,
-          120
-        ],
+        "editor.rulers": [88, 120],
         "files.trimTrailingWhitespace": true,
         "files.insertFinalNewline": true,
         "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
@@ -247,15 +149,11 @@
             "source.fixAll.ruff": "explicit"
           }
         },
-        "mypy-type-checker.args": [
-          "--config-file=pyproject.toml"
-        ],
+        "mypy-type-checker.args": ["--config-file=pyproject.toml"],
         "[dart]": {
           "editor.formatOnSave": true,
           "editor.formatOnType": true,
-          "editor.rulers": [
-            80
-          ],
+          "editor.rulers": [80],
           "editor.selectionHighlight": false,
           "editor.suggestSelection": "first",
           "editor.tabCompletion": "onlySnippets",
@@ -266,11 +164,7 @@
         },
         "[markdown]": {
           "editor.wordWrap": "on",
-          "editor.quickSuggestions": {
-            "comments": "off",
-            "strings": "off",
-            "other": "off"
-          }
+          "editor.quickSuggestions": { "comments": "off", "strings": "off", "other": "off" }
         },
         "[yaml]": {
           "editor.defaultFormatter": "redhat.vscode-yaml"
