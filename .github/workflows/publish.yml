@@ -820,7 +820,46 @@ jobs:
               exit 1
             fi
           done
+            # ------------------------------------------------------------------------
+      # DIAGNOSTIC (temporary — remove once root cause is confirmed either way)
+      # ------------------------------------------------------------------------
+      # "Attest container image provenance" (same job, same Rekor log,
+      # same runner) succeeds; "Attest container image SBOM" fails on every
+      # run, exhausting all cosign-retry.sh attempts. status.sigstore.dev
+      # shows no incidents for the affected window, which argues against a
+      # genuine outage. Leading hypothesis: the public Rekor v1 instance caps
+      # attestation uploads at 100KB, cosign uploads the FULL DSSE envelope
+      # rather than a hash (sigstore/cosign#3599), and a full-image SPDX SBOM
+      # for this multi-stack dev container is a plausible candidate to exceed
+      # that limit while the smaller SLSA provenance predicate does not. This
+      # step only measures and reports — it makes no decision and changes no
+      # behaviour — so the next failing run tells us definitively before we
+      # touch cosign-retry.sh or cosign's signing config.
+      - name: "DIAGNOSTIC: report SBOM/provenance predicate sizes vs. Rekor's 100KB limit"
+        run: |
+          set -euo pipefail
+          REKOR_V1_LIMIT_BYTES=102400  # 100KB — Rekor's documented public-instance attestation upload limit
 
+          {
+            echo "### 🔍 DIAGNOSTIC — predicate payload sizes vs. Rekor's 100KB public-instance limit"
+            echo ""
+            echo "| File | Bytes | KB | Over 100KB limit? |"
+            echo "|---|---|---|---|"
+            for FILE in provenance-amd64.json provenance-arm64.json sbom-amd64.json sbom-arm64.json; do
+              if [[ -f "${FILE}" ]]; then
+                BYTES=$(wc -c < "${FILE}")
+                KB=$(( BYTES / 1024 ))
+                if (( BYTES > REKOR_V1_LIMIT_BYTES )); then
+                  FLAG="⚠️ **YES**"
+                else
+                  FLAG="no"
+                fi
+                echo "| \`${FILE}\` | ${BYTES} | ${KB} | ${FLAG} |"
+              else
+                echo "| \`${FILE}\` | _not found_ | — | — |"
+              fi
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"      
       # Attest the two per-platform SPDX SBOMs extracted above, mirroring the provenance-attest step (cosign appends, so both attestations coexist on the same digest).
       # SIMPLIFIED: retry logic lives in scripts/cosign-retry.sh, shared with sign and provenance attest.
       - name: Attest container image SBOM
