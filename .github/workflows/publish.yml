@@ -821,9 +821,8 @@ jobs:
             fi
           done
 
-      # cleacNEW: attest the two real, per-platform SPDX SBOMs extracted above, mirroring the provenance attest step (two attestations coexist on the same digest; cosign appends rather than overwrites).
-      # NEW: rekor.sigstore.dev occasionally has transient outages; cosign already retries 4x internally before giving up (see live failure log), so this wraps the whole invocation in a further bounded retry rather than failing the release on a momentary blip. COSIGN_RETRY_COUNT/COSIGN_RETRY_DELAY are not real cosign flags — verified against cosign's source/docs — so retry logic must live in this loop, not in env vars.
-      # SIMPLIFIED: retry logic now lives in scripts/cosign-retry.sh, shared with sign and provenance attest.
+      # Attest the two per-platform SPDX SBOMs extracted above, mirroring the provenance-attest step (cosign appends, so both attestations coexist on the same digest).
+      # SIMPLIFIED: retry logic lives in scripts/cosign-retry.sh, shared with sign and provenance attest.
       - name: Attest container image SBOM
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
