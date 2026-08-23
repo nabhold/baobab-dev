@@ -904,6 +904,91 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # ------------------------------------------------------------------------
+      # DIAGNOSTIC: SBOM structural breakdown (2026-08-23)
+      # ------------------------------------------------------------------------
+      # Answers the question the size-only diagnostic above couldn't: WHAT
+      # is actually consuming the ~26MB in sbom-amd64.json, not just how big
+      # it is. Reports package count by ecosystem (via purl scheme) with
+      # per-ecosystem byte contribution, plus the individually largest
+      # package entries. Deliberately does NOT delete or filter anything —
+      # filtering packages out of an SPDX SBOM without first confirming
+      # they're genuinely redundant (not just large) risks attesting a
+      # document that misrepresents what's actually shipped, which is worse
+      # than the current failure. This step exists to tell us which
+      # situation we're actually in before anyone decides to trim anything.
+      # Only sbom-amd64.json is analyzed — arm64's composition should mirror
+      # it closely (same Dockerfile, same package set); re-run this step
+      # against sbom-arm64.json by hand if amd64's breakdown looks
+      # architecture-specific in a way that's surprising.
+      - name: "DIAGNOSTIC: SBOM structural breakdown by ecosystem"
+        run: |
+          set -euo pipefail
+          FILE="sbom-amd64.json"
+
+          if [[ ! -f "${FILE}" ]]; then
+            echo "::warning:: ${FILE} not found — skipping structural breakdown."
+            exit 0
+          fi
+
+          TOTAL_PACKAGES=$(jq '(.packages // []) | length' "${FILE}")
+          TOTAL_FILES=$(jq '(.files // []) | length' "${FILE}")
+          TOTAL_RELATIONSHIPS=$(jq '(.relationships // []) | length' "${FILE}")
+
+          # Per-package: [purl ecosystem scheme, serialized byte length of that package object].
+          # "unknown" catches packages with no purl externalRef at all.
+          jq -r '
+            .packages[]? as $p
+            | ( ($p.externalRefs // [])
+                | map(select(.referenceType == "purl"))
+                | (.[0].referenceLocator // "unknown")
+              ) as $purl
+            | ( if $purl == "unknown" then "unknown"
+                else ($purl | capture("^pkg:(?<s>[^/]+)/").s? // "unknown")
+                end
+              ) as $scheme
+            | [$scheme, ($p | tostring | length)] | @tsv
+          ' "${FILE}" > /tmp/pkg-by-scheme.tsv
+
+          # Aggregate: count + total bytes per ecosystem, sorted by bytes desc.
+          BY_SCHEME=$(awk -F'\t' '
+            { count[$1]++; bytes[$1]+=$2 }
+            END { for (s in count) printf "%s\t%d\t%d\n", s, count[s], bytes[s] }
+          ' /tmp/pkg-by-scheme.tsv | sort -t $'\t' -k3 -rn)
+
+          # Individually largest package entries (catches outliers — e.g. one
+          # entry with an unusually large embedded license/copyright blob —
+          # separately from "which ecosystem has the most packages").
+          TOP_PACKAGES=$(jq -r '
+            .packages[]?
+            | [ (. | tostring | length), .name, (.versionInfo // "?") ] | @tsv
+          ' "${FILE}" | sort -rn | head -15)
+
+          {
+            echo "### 🔍 DIAGNOSTIC — SBOM structural breakdown (${FILE})"
+            echo ""
+            echo "**Totals:** ${TOTAL_PACKAGES} packages, ${TOTAL_FILES} file entries, ${TOTAL_RELATIONSHIPS} relationships"
+            echo ""
+            echo "#### By ecosystem (purl scheme)"
+            echo ""
+            echo "| Ecosystem | Package count | Total bytes | Avg bytes/pkg |"
+            echo "|---|---|---|---|"
+            while IFS=$'\t' read -r scheme count bytes; do
+              [[ -z "${scheme}" ]] && continue
+              avg=$(( bytes / count ))
+              echo "| \`${scheme}\` | ${count} | ${bytes} | ${avg} |"
+            done <<< "${BY_SCHEME}"
+            echo ""
+            echo "#### 15 largest individual package entries"
+            echo ""
+            echo "| Bytes | Name | Version |"
+            echo "|---|---|---|"
+            while IFS=$'\t' read -r bytes name version; do
+              [[ -z "${bytes}" ]] && continue
+              echo "| ${bytes} | \`${name}\` | \`${version}\` |"
+            done <<< "${TOP_PACKAGES}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------------
       # Rekor v2 signing config for the SBOM attestation only (2026-08-23)
       # ------------------------------------------------------------------------
       # Root cause confirmed via the diagnostic step above: this image's SPDX
