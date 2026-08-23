@@ -741,24 +741,22 @@ jobs:
       # already matches this project's "explicit, reviewed version bumps"
       # convention without a second manual pin.
       #
-      # KNOWN OPEN RISK — WATCH THIS RUN: Cosign v3 defaults to storing
+      # RESOLVED (2026-08-23): Cosign v3 defaults to storing
       # signatures/attestations as OCI 1.1 Referrers-API artifacts instead
       # of the legacy `sha256-<digest>.sig`/`.att` tag convention this
-      # pipeline has relied on since v2.x. GHCR's OCI 1.1 Referrers API
-      # support could not be confirmed with confidence — sources found
-      # during this investigation conflict (some recent reports say GHCR
-      # now supports read+write of referrers; other reports as recent as
-      # mid-2025 say it does not). cosign v3.1.x's own verify commands
-      # auto-detect old vs. new bundle format, so "Verify published image
-      # signature & attestations" below should work either way IF the
-      # referrer is discoverable at all — but if GHCR's referrers support is
-      # genuinely partial, sign/attest could succeed while verification (or
-      # a downstream consumer's `docker pull` + verify) silently can't find
-      # what was written. If "Verify published image signature &
-      # attestations" fails here in a way that looks like "nothing found"
-      # rather than "invalid signature", this is the first thing to check —
-      # `crane manifest`/`docker buildx imagetools inspect` on the digest to
-      # confirm whether the referrer is actually listed.
+      # pipeline relied on under v2.x. GHCR's Referrers API support couldn't
+      # be confirmed from documentation alone — sources found during this
+      # investigation conflicted (some recent reports said GHCR supports
+      # read+write of referrers; others as recent as mid-2025 said it did
+      # not). Settled empirically instead of by further research: the
+      # v1.0.0-rc.2 run signed, attested (signature + SLSA provenance + SPDX
+      # SBOM), and then "Verify published image signature & attestations"
+      # independently re-verified all three from a cold `cosign
+      # verify`/`verify-attestation` — full round trip, real success, not
+      # inferred. GHCR's Referrers API support is fine for this pipeline's
+      # purposes. Leaving this note in place as the record of how that was
+      # actually confirmed, in case it's ever in doubt again after a future
+      # cosign or GHCR change.
       - name: Install Cosign CLI tool
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       
@@ -1123,10 +1121,25 @@ jobs:
       # ------------------------------------------------------------------------
       # Create GitHub Release with Verification Instructions
       # ------------------------------------------------------------------------
-      - name: Create GitHub Release
+      # UPDATED (2026-08-23): split into create-as-draft + publish. A plain
+      # (non-draft) release create + asset-upload in one step failed with
+      # "Cannot upload assets to an immutable release" — this org/repo has
+      # GitHub's Immutable Releases enabled (a good thing: it locks the tag
+      # and assets after publish and auto-generates a cryptographically
+      # verifiable release attestation, matching this pipeline's own
+      # zero-trust goals). Immutability applies from the moment a release is
+      # published, not from creation — so per GitHub's own documented
+      # sequence (docs: "Immutable releases" > "Best practices for
+      # publishing immutable releases"): create as a DRAFT (drafts are
+      # exempt from immutability, so assets can still attach), then publish
+      # only after the asset is safely attached. Nothing about the release
+      # content changes — this only reorders when it goes non-draft.
+      - name: Create GitHub Release (draft)
+        id: create-release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
         with:
+          draft: true
           files: config/versions.lock
           generate_release_notes: true
           body: |
@@ -1152,6 +1165,22 @@ jobs:
               --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
               ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
             ```
+
+      # Publishes the draft created above — the moment this runs is when the
+      # release (tag + assets) actually becomes immutable. `gh release edit`
+      # is used rather than a second action: it's already on every
+      # GitHub-hosted runner, and this is a one-line operation not worth a
+      # third-party action dependency for. Runs under the same GITHUB_TOKEN
+      # already scoped `contents: write` at the job level — no new
+      # permission needed.
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+
 
       # ------------------------------------------------------------------------
       # Step Summary Output
