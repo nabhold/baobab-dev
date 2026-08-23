@@ -3,19 +3,66 @@
 # File: scripts/post-create.sh
 #
 # Runs inside the running container as the `vscode` user, via Dev Container
-# lifecycle hooks. It is intentionally split into two stages:
+# lifecycle hooks. It is intentionally split into stages:
 #
 #   --stage=on-create
 #       Runs once immediately after the container is created. Performs
 #       lightweight, idempotent infrastructure initialization that can be
 #       cached by Codespaces prebuilds.
 #
+#   --stage=update-content
+#       Runs during Codespaces prebuild generation, and again on every
+#       content update. THIS is the stage Codespaces prebuilds actually
+#       snapshot — see CHANGE LOG below. Runs the same repository dependency
+#       installation as post-create (they intentionally share one
+#       implementation, run_post_create — see that entry for why).
+#
 #   --stage=post-create
-#       Runs after the workspace is mounted. Installs THIS repository's
-#       project dependencies while keeping the published development image
-#       framework-version agnostic.
+#       Runs after the workspace is mounted, once per Codespace/container
+#       creation. Installs THIS repository's project dependencies while
+#       keeping the published development image framework-version agnostic.
 #
 # Safe to re-run. Every operation is idempotent.
+#
+# CHANGE LOG (this file, most recent first)
+# ------------------------------------------------------------------------------
+# * [2026-08-23] Added the missing `update-content` case branch. Root cause:
+#   devcontainer.json's `updateContentCommand` calls this script with
+#   `--stage=update-content`, but the case statement below only recognized
+#   `on-create` and `post-create` — any other stage fell through to the `*)`
+#   branch and called `die`. Since `updateContentCommand` runs on EVERY
+#   Codespaces prebuild generation and every Codespace creation, this
+#   crashed every single time, unconditionally.
+#
+#   Fixed by pointing `update-content` at the SAME `run_post_create`
+#   function `post-create` already calls, rather than inventing a separate
+#   implementation — deliberately, for two reasons:
+#     1. It's the fix with the smallest, most auditable diff: one new case
+#        arm, zero changes to existing behavior.
+#     2. scripts/bootstrap.sh (onboarding outside the Codespaces/Dev
+#        Container lifecycle — bare `docker run`, a self-hosted runner, a
+#        manual clone) calls this script directly with
+#        `--stage=on-create` then `--stage=post-create`, and NEVER
+#        `--stage=update-content`. Moving the dependency-install logic OUT
+#        of `run_post_create` (e.g. into a new, update-content-only
+#        function) would have silently broken bootstrap.sh's "one-command
+#        onboarding" promise for every one of those use cases. Reusing the
+#        same function instead keeps bootstrap.sh, and every existing
+#        Codespaces behavior, completely unchanged.
+#
+#   Side effect, and the actual point of this fix beyond just not crashing:
+#   this is also what makes Codespaces prebuilds worth having. Prebuild
+#   generation runs `updateContentCommand` and snapshots its result;
+#   `postCreateCommand` (a separate stage) never gets captured by a
+#   prebuild. The expensive part of this script — Poetry/npm/Flutter
+#   dependency installation — now runs during the stage that's actually
+#   captured, so a Codespace created from a fresh prebuild gets those
+#   dependencies pre-installed. `post-create` still re-runs the same
+#   installs on actual Codespace creation regardless (every tool here —
+#   Poetry, npm ci, flutter pub get — is fast/no-op when nothing changed
+#   since the prebuild), as a correctness safety net: a prebuild can be
+#   stale relative to the exact commit a Codespace is created from, and
+#   re-running is far cheaper than silently serving stale dependencies.
 # =============================================================================
 
 set -euo pipefail
@@ -104,7 +151,7 @@ run_on_create() {
 }
 
 # -----------------------------------------------------------------------------
-# Stage: post-create
+# Stage: post-create (and update-content — see CHANGE LOG above)
 # -----------------------------------------------------------------------------
 
 run_post_create() {
@@ -294,6 +341,10 @@ run_post_create() {
 case "${STAGE}" in
     on-create)
         run_on_create
+        ;;
+
+    update-content)
+        run_post_create
         ;;
 
     post-create)

@@ -25,10 +25,20 @@ if ! type _git >/dev/null 2>&1 && [ -f /usr/share/bash-completion/completions/gi
   . /usr/share/bash-completion/completions/git
 fi
 
-# gh, docker, and poetry ship their own completion generators.
-command -v gh >/dev/null 2>&1 && eval "$(gh completion -s bash)" 2>/dev/null
-command -v docker >/dev/null 2>&1 && . <(docker completion bash 2>/dev/null) 2>/dev/null
-command -v poetry >/dev/null 2>&1 && eval "$(poetry completions bash)" 2>/dev/null
+# gh/docker/poetry completions: NOT generated here anymore (2026-08-23).
+# They used to be regenerated live on every shell startup — three
+# subprocess spawns per new terminal/tab/tmux pane, `poetry completions
+# bash` worst of the three since it means a cold Python interpreter start
+# just to print static text. They're now baked ONCE into
+# /etc/bash_completion.d/{gh,docker,poetry} at Docker build time (see the
+# Dockerfile's Section 11). Standard bash-completion (sourced immediately
+# above) auto-discovers and lazily loads anything under
+# /etc/bash_completion.d/ by filename — nothing further to source
+# explicitly here. If gh/docker/poetry are ever upgraded at container
+# runtime by some means other than a fresh image build, their completions
+# would need regenerating by hand; that's not a workflow this project
+# currently supports (all three are pinned, image-baked versions), so it's
+# an accepted tradeoff, not an oversight.
 
 shopt -s checkwinsize
 shopt -s globstar 2>/dev/null

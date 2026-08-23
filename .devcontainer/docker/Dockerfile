@@ -575,6 +575,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     export PATH="/usr/local/bin:${PATH}" && \
     python3 -m pipx ensurepath --global && \
     pipx install --global "poetry==${POETRY_VERSION}" && \
+    pipx inject --global poetry poetry-plugin-shell && \
     python3 -m pip install --no-cache-dir --break-system-packages --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
     chmod -R a+rX "${PIPX_GLOBAL_HOME}"
     
@@ -768,6 +769,21 @@ RUN chown -R vscode:vscode /opt/flutter
 # -----------------------------------------------------------------------------
 # 11. Shell enhancements: completions, aliases, colored prompt, history
 # -----------------------------------------------------------------------------
+# gh/docker/poetry completions are generated ONCE, here, at build time,
+# rather than by config/bashrc.d/30-history-and-completion.sh spawning a
+# subprocess for each on every interactive shell startup. poetry
+# completions in particular means a cold Python interpreter start just to
+# print static text — real, measurable latency paid on every new terminal
+# tab, tmux pane, or nested shell. Standard bash-completion (already
+# sourced by 30-history-and-completion.sh) auto-discovers and lazily loads
+# anything under /etc/bash_completion.d/ by filename, so dropping the
+# pre-generated scripts there is all that's needed — no explicit `source`
+# required in the shell profile script.
+RUN mkdir -p /etc/bash_completion.d && \
+    gh completion -s bash > /etc/bash_completion.d/gh && \
+    docker completion bash > /etc/bash_completion.d/docker && \
+    poetry completions bash > /etc/bash_completion.d/poetry
+
 COPY --chown=vscode:vscode config/bashrc.d/ /etc/bashrc.d/
 RUN echo '\n# BAOBAB devcontainer shell enhancements\nfor f in /etc/bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done' \
       >> /etc/bash.bashrc
