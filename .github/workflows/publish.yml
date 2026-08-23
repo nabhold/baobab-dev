@@ -818,6 +818,24 @@ jobs:
       # `.Provenance` (sigstore/cosign#3030). BuildKit's SBOM layer uses
       # predicate type "https://spdx.dev/Document" exactly, with no
       # version-suffix ambiguity, so an exact match is safe here.
+      #
+      # FILE-LEVEL TRIM (2026-08-23): the structural-breakdown diagnostic
+      # confirmed the ~26.6MB SBOM was 87.3% file-level cataloging (22,588
+      # SPDX `files` entries + their ownership `relationships`) and only
+      # 12.7% actual packages (2,783, fully declared). Syft has an official
+      # setting for exactly this detail-level choice —
+      # `file.metadata.selection: none` / env `SYFT_FILE_METADATA_SELECTION`
+      # — but BuildKit's native SBOM generator (docker/buildkit-syft-scanner)
+      # does not expose Syft config passthrough (confirmed: open upstream
+      # issue, docker/buildkit-syft-scanner#130, reporter's own reading of
+      # the source says the config is hardcoded; the only scanner build args
+      # BuildKit documents are BUILDKIT_SBOM_SCAN_STAGE/_CONTEXT, which
+      # control scan SCOPE, not detail level). Reproduced the same effect
+      # here as post-processing instead: strips the `files` array and any
+      # `relationships` entry that references a file element, leaves
+      # `packages` completely untouched — verified below, not assumed.
+      # `.comment` is added to the SPDX document itself so any consumer of
+      # this attestation sees the omission disclosed in-band, not silently.
       - name: Extract per-platform SPDX SBOM predicates
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -830,6 +848,7 @@ jobs:
           for PLATFORM in linux/amd64 linux/arm64; do
             ARCH="${PLATFORM#linux/}"
             FILE="sbom-$(basename "${PLATFORM}").json"
+            RAW_FILE="sbom-$(basename "${PLATFORM}")-raw.json"
 
             IMAGE_DIGEST=$(echo "${MANIFEST_JSON}" | jq -r --arg arch "${ARCH}" \
               '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
@@ -858,24 +877,57 @@ jobs:
               exit 1
             fi
 
-            crane blob "${IMG}@${PREDICATE_DIGEST}" | jq '.predicate' > "${FILE}"
+            crane blob "${IMG}@${PREDICATE_DIGEST}" | jq '.predicate' > "${RAW_FILE}"
 
-            if [[ ! -s "${FILE}" ]] || [[ "$(cat "${FILE}")" == "null" ]]; then
+            if [[ ! -s "${RAW_FILE}" ]] || [[ "$(cat "${RAW_FILE}")" == "null" ]]; then
               echo "::error:: Fetched in-toto statement for ${PLATFORM} but its .predicate field was empty/null (blob ${PREDICATE_DIGEST})."
               exit 1
             fi
+
+            RAW_PACKAGE_COUNT=$(jq '(.packages // []) | length' "${RAW_FILE}")
+
+            # Strip file-level entries + their ownership relationships only.
+            # Builds a hash-set of file SPDXIDs first (single pass) so the
+            # relationship filter is O(1) per lookup rather than an
+            # index()-per-relationship scan against 20k+ file IDs.
+            jq '
+              (reduce (.files // [])[] as $f ({}; .[$f.SPDXID] = true)) as $file_set
+              | del(.files)
+              | .relationships = ((.relationships // []) | map(select(
+                  ($file_set[.spdxElementId] // false) == false and
+                  ($file_set[.relatedSpdxElement] // false) == false
+                )))
+              | .comment = "File-level cataloging (SPDX '\''files'\'' array and per-file ownership relationships) intentionally omitted from this attestation to keep the predicate within Sigstore Rekor'\''s practical size limits. Every package below remains fully declared with complete purl/version/license metadata — nothing was removed from the package list, only the per-file evidence layer beneath it. Re-scan the published image directly with Syft (file.metadata.selection: all) for file-level detail."
+            ' "${RAW_FILE}" > "${FILE}"
+
+            TRIMMED_PACKAGE_COUNT=$(jq '(.packages // []) | length' "${FILE}")
+
+            # Hard guarantee, not an assumption: the trim above must never
+            # touch .packages. If these counts ever diverge, something is
+            # structurally wrong with the jq above — fail loudly rather than
+            # attest a predicate that may have silently lost package data.
+            if [[ "${RAW_PACKAGE_COUNT}" != "${TRIMMED_PACKAGE_COUNT}" ]]; then
+              echo "::error:: Package count changed during file-level trim for ${PLATFORM}: ${RAW_PACKAGE_COUNT} -> ${TRIMMED_PACKAGE_COUNT}. This should be structurally impossible. Refusing to attest — investigate the trim jq in this step before re-running."
+              exit 1
+            fi
+
+            RAW_BYTES=$(wc -c < "${RAW_FILE}")
+            TRIMMED_BYTES=$(wc -c < "${FILE}")
+            echo "::notice:: ${PLATFORM}: SBOM trimmed ${RAW_BYTES} -> ${TRIMMED_BYTES} bytes (${RAW_PACKAGE_COUNT} packages, unchanged)."
+
+            rm -f "${RAW_FILE}"
           done
 
       # ------------------------------------------------------------------------
-      # DIAGNOSTIC (temporary — keeping deliberately, per 2026-08-23 decision:
-      # relevant again once SBOM-trimming work starts, to compare before/after
-      # sizes against this baseline: sbom-amd64.json ~26.6MB, sbom-arm64.json
-      # ~26.7MB, both ~120x provenance-amd64.json/provenance-arm64.json's
-      # ~223KB. This is the confirmed root cause of the original
-      # "Attest container image SBOM" Rekor failure: Rekor v1 requires
-      # uploading the ENTIRE DSSE-wrapped payload (sigstore/cosign#3599), and
-      # a full-image SPDX SBOM this large gets rejected outright, while the
-      # much smaller provenance predicate attests fine on the same log.)
+      # DIAGNOSTIC (kept permanently as a release-time sanity check, not just
+      # for this investigation): reports the size of whatever sbom-*.json and
+      # provenance-*.json ended up on disk. As of the 2026-08-23 file-level
+      # trim in "Extract per-platform SPDX SBOM predicates" above, that means
+      # the ALREADY-TRIMMED SBOM (originally ~26.6MB/~26.7MB before the trim,
+      # ~120x provenance's ~223KB — see that step's comment for the full
+      # root-cause analysis of why the untrimmed size broke Rekor v1). This
+      # table is what tells us, on every future run, whether the trimmed size
+      # still stays comfortably clear of size trouble — not a one-time check.
       # ------------------------------------------------------------------------
       - name: "DIAGNOSTIC: report SBOM/provenance predicate sizes vs. Rekor's 100KB limit"
         run: |
@@ -906,16 +958,17 @@ jobs:
       # ------------------------------------------------------------------------
       # DIAGNOSTIC: SBOM structural breakdown (2026-08-23)
       # ------------------------------------------------------------------------
-      # Answers the question the size-only diagnostic above couldn't: WHAT
-      # is actually consuming the ~26MB in sbom-amd64.json, not just how big
-      # it is. Reports package count by ecosystem (via purl scheme) with
-      # per-ecosystem byte contribution, plus the individually largest
-      # package entries. Deliberately does NOT delete or filter anything —
-      # filtering packages out of an SPDX SBOM without first confirming
-      # they're genuinely redundant (not just large) risks attesting a
-      # document that misrepresents what's actually shipped, which is worse
-      # than the current failure. This step exists to tell us which
-      # situation we're actually in before anyone decides to trim anything.
+      # Originally written to answer "what's consuming the ~26MB" before any
+      # trim existed — that investigation found 87.3% of the file was SPDX
+      # `files` entries + ownership `relationships`, only 12.7% actual
+      # packages, which directly led to the file-level trim now applied in
+      # "Extract per-platform SPDX SBOM predicates" above. Kept running here
+      # as a confirmation check, not just a historical artifact: this table
+      # should now show `files: 0` and the same package count/ecosystem
+      # breakdown as before the trim — if either one looks wrong on a given
+      # run (files > 0, or an ecosystem's package count changed), that's a
+      # sign the trim step's guard rail didn't catch something and needs
+      # attention before trusting this run's attestation.
       # Only sbom-amd64.json is analyzed — arm64's composition should mirror
       # it closely (same Dockerfile, same package set); re-run this step
       # against sbom-arm64.json by hand if amd64's breakdown looks
