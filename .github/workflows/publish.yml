@@ -958,10 +958,18 @@ jobs:
           # Individually largest package entries (catches outliers — e.g. one
           # entry with an unusually large embedded license/copyright blob —
           # separately from "which ecosystem has the most packages").
+          # NOTE: `sort -rn | { head -15; cat >/dev/null; }` — not just `| head -15`.
+          # Under `set -o pipefail`, `head` closing the pipe after its 15 lines
+          # sends SIGPIPE to `sort` while it's still writing the remaining
+          # (unwanted) output, which makes `sort` exit non-zero and kills this
+          # whole step via `set -e` — confirmed live in this project's own CI
+          # (2026-08-23: "sort: write failed: 'standard output': Broken pipe",
+          # exit code 2). Draining the rest into /dev/null after `head` is done
+          # lets `sort` finish writing to a live reader every time.
           TOP_PACKAGES=$(jq -r '
             .packages[]?
             | [ (. | tostring | length), .name, (.versionInfo // "?") ] | @tsv
-          ' "${FILE}" | sort -rn | head -15)
+          ' "${FILE}" | sort -rn | { head -15; cat >/dev/null; })
 
           {
             echo "### 🔍 DIAGNOSTIC — SBOM structural breakdown (${FILE})"
