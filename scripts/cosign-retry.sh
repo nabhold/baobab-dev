@@ -7,11 +7,11 @@
 # Retries a single cosign invocation (sign / attest / any subcommand) with
 # exponential backoff + jitter, then fails loudly if every attempt is
 # exhausted. Exists because cosign's uploads to the public Rekor
-# transparency log (rekor.sigstore.dev) occasionally hit transient outages
-# — cosign already retries internally (4 attempts, observed live in this
-# project's own CI) before giving up, but a longer blip can still exceed
-# that. This wraps the WHOLE cosign invocation in a further bounded retry
-# rather than failing an entire release on a momentary network hiccup.
+# transparency log occasionally hit transient outages — cosign already
+# retries internally (4 attempts, observed live in this project's own CI)
+# before giving up, but a longer blip can still exceed that. This wraps the
+# WHOLE cosign invocation in a further bounded retry rather than failing an
+# entire release on a momentary network hiccup.
 #
 # COSIGN_RETRY_* are NOT real cosign flags or environment variables
 # (verified against cosign's own CLI/source) — retry logic has to live
@@ -26,6 +26,19 @@
 # attempt count, trading a few extra minutes of a tag-gated release job
 # (not on the PR hot path) for a real chance of riding out a blip instead
 # of forcing a manual re-run every time.
+#
+# CHANGE (2026-08-23): the final error message no longer asserts "this is
+# most likely a transient outage." Two real incidents since the change
+# above both LOOKED like Rekor connectivity failures from this wrapper's
+# vantage point but were NOT transient outages: (1) an oversized SBOM
+# attestation payload being rejected by Rekor v1 on every single attempt,
+# and (2) an "unknown flag" error from a cosign-installer/cosign-CLI
+# version mismatch, which this wrapper still dutifully retried 5 times
+# before failing. This wrapper cannot distinguish "genuinely transient" from
+# "deterministic, every time, for a structural reason" — retrying is still
+# the right default behavior either way, but presupposing the diagnosis in
+# the failure message actively steered debugging in the wrong direction
+# both times. It now lists what to check instead of guessing.
 #
 # Usage:
 #   scripts/cosign-retry.sh <cosign command and arguments...>
@@ -87,5 +100,12 @@ for attempt in $(seq 1 "${ATTEMPTS}"); do
 done
 
 echo "::error:: cosign-retry: all ${ATTEMPTS} attempts failed for: ${LABEL}"
-echo "::error:: This is most likely a transient rekor.sigstore.dev outage — check https://status.sigstore.dev before re-running."
+# Deliberately NOT asserting a single most-likely cause (see CHANGE
+# 2026-08-23 above) — a failure that survives every retry is just as
+# consistent with a deterministic, non-network cause as with an outage.
+echo "::error:: Every attempt failed identically, which usually means a deterministic cause, not random network flakiness. Before re-running, check in order:"
+echo "::error::   1. Is the error itself something other than a connection/timeout? (e.g. 'unknown flag', a size/quota rejection, an auth error) — read the actual error text above, not just this summary."
+echo "::error::   2. https://status.sigstore.dev — rule out a genuine, currently-reported Rekor/Fulcio outage."
+echo "::error::   3. Did the cosign version actually installed this run change? ('cosign version' in an earlier step's log) — an installer/CLI version mismatch can silently swap flag support."
+echo "::error::   4. Payload size — an oversized SBOM/provenance predicate can be rejected deterministically on every attempt; see the SBOM-size diagnostic step in publish.yml if this is the SBOM attest call."
 exit 1

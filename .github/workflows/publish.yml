@@ -9,6 +9,8 @@
 #   4. Native Buildx SBOM (sbom: true) + SLSA provenance (provenance: true).
 #   5. Trivy gate blocks release on unpatched CRITICAL/HIGH CVEs.
 #   6. Keyless Cosign signing/attestation via GitHub OIDC — no static keys.
+#      Cosign CLI v3.x since 2026-08-23 (see "Install Cosign CLI tool" below
+#      for why this was a forced, non-optional major-version upgrade).
 #   7. Tag-gated publish, shift-left security — see policies below.
 #
 # PUBLISH TRIGGER POLICY:
@@ -715,8 +717,46 @@ jobs:
       # Keyless OIDC Cosign Infrastructure
       # Installs Cosign; signs/attests via short-lived GitHub OIDC tokens
       # instead of long-lived static keys.
+      #
+      # UPGRADED (2026-08-23): cosign-installer v3.8.0 -> v4.1.2, forced by
+      # a genuine version-scheme trap: v3.8.0 was the INSTALLER ACTION's own
+      # version, not the cosign CLI's — sigstore/cosign-installer's own
+      # release notes state "cosign-installer v3.x cannot be used to install
+      # Cosign v3.x; you must upgrade to cosign-installer v4 in order to use
+      # Cosign v3." This job had been running some cosign v2.x release the
+      # whole time. --signing-config (needed for the Rekor v2 SBOM-attest
+      # fix below) only exists from cosign v2.6.0 on, on-by-default from
+      # v3.0 on — hence "unknown flag: --signing-config" on the old pin.
+      #
+      # No `cosign-release:` override: cosign-installer's own README
+      # explicitly recommends AGAINST pinning a specific Cosign version
+      # unless you have a specific reason to run an older one — one fewer
+      # version to independently track. Dependabot's existing
+      # `github-actions` ecosystem keeps this action's own SHA (and
+      # therefore its bundled Cosign default) current and reviewable, which
+      # already matches this project's "explicit, reviewed version bumps"
+      # convention without a second manual pin.
+      #
+      # KNOWN OPEN RISK — WATCH THIS RUN: Cosign v3 defaults to storing
+      # signatures/attestations as OCI 1.1 Referrers-API artifacts instead
+      # of the legacy `sha256-<digest>.sig`/`.att` tag convention this
+      # pipeline has relied on since v2.x. GHCR's OCI 1.1 Referrers API
+      # support could not be confirmed with confidence — sources found
+      # during this investigation conflict (some recent reports say GHCR
+      # now supports read+write of referrers; other reports as recent as
+      # mid-2025 say it does not). cosign v3.1.x's own verify commands
+      # auto-detect old vs. new bundle format, so "Verify published image
+      # signature & attestations" below should work either way IF the
+      # referrer is discoverable at all — but if GHCR's referrers support is
+      # genuinely partial, sign/attest could succeed while verification (or
+      # a downstream consumer's `docker pull` + verify) silently can't find
+      # what was written. If "Verify published image signature &
+      # attestations" fails here in a way that looks like "nothing found"
+      # rather than "invalid signature", this is the first thing to check —
+      # `crane manifest`/`docker buildx imagetools inspect` on the digest to
+      # confirm whether the referrer is actually listed.
       - name: Install Cosign CLI tool
-        uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e # v3.8.0
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       
       # NEW: make the shared cosign-retry wrapper executable once, here — all three cosign-calling steps below depend on it.
       - name: Make cosign-retry.sh executable
@@ -739,15 +779,20 @@ jobs:
       # Cosign-signs the two per-platform predicates extracted above (two
       # calls — see "Extract per-platform SLSA provenance predicates").
       # `-a`/`--annotation` is deliberately omitted here (unlike `cosign
-      # sign` above): `cosign attest` doesn't accept it in the pinned CLI
-      # ("unknown shorthand flag: 'a' in -a", hit on the v1.0.0-rc.2 run
-      # that surfaced this investigation). `--type slsaprovenance1`
+      # sign` above): `cosign attest` doesn't accept it — confirmed absent
+      # from `cosign attest`'s own flag list on both the old v2.x pin and
+      # the current v3.1.x line ("unknown shorthand flag: 'a' in -a", hit
+      # on the v1.0.0-rc.2 run that surfaced this investigation) — this is
+      # not a version-specific gap. `--type slsaprovenance1`
       # (the v1 predicate shorthand) is deliberate, not cosmetic:
       # scripts/verify-image.sh's `cosign verify-attestation` resolves
       # plain `slsaprovenance` to the DIFFERENT v0.2 URI, so attesting
       # under v1 while verifying under the v0.2 alias would never match.
       # scripts/verify-image.sh has been updated to check
       # `--type slsaprovenance1` to match.
+      # This step deliberately stays on cosign's default (TUF-distributed,
+      # currently Rekor v1) signing config — it already succeeds; only the
+      # SBOM attest step below needs the Rekor v2 override.
       # UPDATED: cosign needs the predicate type this run actually resolved per platform (v1, or the rare v0.2 fallback), read from the sidecar file the extraction step above wrote — no longer hardcoded to slsaprovenance1.
       # SIMPLIFIED: retry logic now lives in scripts/cosign-retry.sh, shared with sign and SBOM attest.
       - name: Attest container image provenance
@@ -820,25 +865,22 @@ jobs:
               exit 1
             fi
           done
-            # ------------------------------------------------------------------------
-      # DIAGNOSTIC (temporary — remove once root cause is confirmed either way)
+
       # ------------------------------------------------------------------------
-      # "Attest container image provenance" (same job, same Rekor log,
-      # same runner) succeeds; "Attest container image SBOM" fails on every
-      # run, exhausting all cosign-retry.sh attempts. status.sigstore.dev
-      # shows no incidents for the affected window, which argues against a
-      # genuine outage. Leading hypothesis: the public Rekor v1 instance caps
-      # attestation uploads at 100KB, cosign uploads the FULL DSSE envelope
-      # rather than a hash (sigstore/cosign#3599), and a full-image SPDX SBOM
-      # for this multi-stack dev container is a plausible candidate to exceed
-      # that limit while the smaller SLSA provenance predicate does not. This
-      # step only measures and reports — it makes no decision and changes no
-      # behaviour — so the next failing run tells us definitively before we
-      # touch cosign-retry.sh or cosign's signing config.
+      # DIAGNOSTIC (temporary — keeping deliberately, per 2026-08-23 decision:
+      # relevant again once SBOM-trimming work starts, to compare before/after
+      # sizes against this baseline: sbom-amd64.json ~26.6MB, sbom-arm64.json
+      # ~26.7MB, both ~120x provenance-amd64.json/provenance-arm64.json's
+      # ~223KB. This is the confirmed root cause of the original
+      # "Attest container image SBOM" Rekor failure: Rekor v1 requires
+      # uploading the ENTIRE DSSE-wrapped payload (sigstore/cosign#3599), and
+      # a full-image SPDX SBOM this large gets rejected outright, while the
+      # much smaller provenance predicate attests fine on the same log.)
+      # ------------------------------------------------------------------------
       - name: "DIAGNOSTIC: report SBOM/provenance predicate sizes vs. Rekor's 100KB limit"
         run: |
           set -euo pipefail
-          REKOR_V1_LIMIT_BYTES=102400  # 100KB — Rekor's documented public-instance attestation upload limit
+          REKOR_V1_LIMIT_BYTES=102400  # 100KB — Rekor's documented public-instance attestation upload limit (empirically, the real ceiling for our failure sits somewhere between this and 26MB — see thread history for full analysis)
 
           {
             echo "### 🔍 DIAGNOSTIC — predicate payload sizes vs. Rekor's 100KB public-instance limit"
@@ -859,20 +901,18 @@ jobs:
                 echo "| \`${FILE}\` | _not found_ | — | — |"
               fi
             done
-          } | tee -a "$GITHUB_STEP_SUMMARY"      
-      
-            # ------------------------------------------------------------------------
-      # NEW (2026-08-23): Rekor v2 signing config for the SBOM attestation only
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       # ------------------------------------------------------------------------
-      # Root cause of the persistent "Attest container image SBOM" failure
-      # (rekor.sigstore.dev POST giving up after every retry) confirmed via
-      # the diagnostic step above: this image's SPDX SBOM predicate runs
-      # ~26MB, ~120x larger than the SLSA provenance predicate (~223KB) that
-      # attests successfully against the same log. Rekor v1 requires
-      # uploading the ENTIRE DSSE-wrapped payload (sigstore/cosign#3599), and
-      # has a documented history of rejecting very large attestations outright
-      # — matches our symptom exactly: deterministic, every run, only on the
-      # oversized predicate.
+      # Rekor v2 signing config for the SBOM attestation only (2026-08-23)
+      # ------------------------------------------------------------------------
+      # Root cause confirmed via the diagnostic step above: this image's SPDX
+      # SBOM predicate runs ~26MB, ~120x larger than the SLSA provenance
+      # predicate (~223KB) that attests successfully against the same log.
+      # Rekor v1 requires uploading the ENTIRE DSSE-wrapped payload
+      # (sigstore/cosign#3599), and has a documented history of rejecting
+      # very large attestations outright — matches our symptom exactly:
+      # deterministic, every run, only on the oversized predicate.
       #
       # Rekor v2 fixes this at the protocol level: only a hash of the DSSE
       # envelope's pre-auth encoding is uploaded, never the full payload
@@ -882,6 +922,11 @@ jobs:
       # Sigstore's own documented early-adopter path: take a copy of the live
       # TUF-distributed production SigningConfig and override only
       # `rekorTlogUrls` to add the v2 log ahead of the v1 log.
+      #
+      # PREREQUISITE: `cosign attest --signing-config` requires cosign
+      # v2.6.0+ (default-on from v3.0+) — this is WHY "Install Cosign CLI
+      # tool" above had to move off cosign-installer v3.x (which caps at
+      # cosign v2.x) to v4.x. See that step's comment for the full story.
       #
       # DELIBERATELY SCOPED: only "Attest container image SBOM" gets
       # --signing-config. "Sign container image" and "Attest container image
@@ -951,9 +996,9 @@ jobs:
       # Rekor entry to Rekor v2 (hashed upload — no practical payload size
       # ceiling) instead of the TUF default (Rekor v1), which was rejecting
       # this predicate outright due to size. See "Build Rekor v2 signing
-      # config for SBOM attestation" above for full rationale. Sign and
-      # provenance-attest are deliberately left on the default (Rekor v1) —
-      # they already succeed.
+      # config for SBOM attestation" above for full rationale. Requires the
+      # cosign-installer v4.x bump above — this flag doesn't exist on the
+      # cosign v2.x line the old v3.8.0 installer pin was actually running.
       - name: Attest container image SBOM
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -980,6 +1025,11 @@ jobs:
       # (steps.create-manifest.outputs.digest), not by tag: a tag is a
       # mutable pointer that could move between the sign step and this
       # check; the digest cannot.
+      # NOTE (2026-08-23): this step is the practical test of the "Install
+      # Cosign CLI tool" step's known open risk (GHCR OCI 1.1 Referrers API
+      # support) — see that step's comment. If this fails with something
+      # that reads like "no matching signatures/attestations found" rather
+      # than a cryptographic/identity mismatch, start there.
       - name: Verify published image signature & attestations
         run: |
           chmod +x scripts/verify-image.sh
