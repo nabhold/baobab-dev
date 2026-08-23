@@ -860,8 +860,100 @@ jobs:
               fi
             done
           } | tee -a "$GITHUB_STEP_SUMMARY"      
+      
+            # ------------------------------------------------------------------------
+      # NEW (2026-08-23): Rekor v2 signing config for the SBOM attestation only
+      # ------------------------------------------------------------------------
+      # Root cause of the persistent "Attest container image SBOM" failure
+      # (rekor.sigstore.dev POST giving up after every retry) confirmed via
+      # the diagnostic step above: this image's SPDX SBOM predicate runs
+      # ~26MB, ~120x larger than the SLSA provenance predicate (~223KB) that
+      # attests successfully against the same log. Rekor v1 requires
+      # uploading the ENTIRE DSSE-wrapped payload (sigstore/cosign#3599), and
+      # has a documented history of rejecting very large attestations outright
+      # — matches our symptom exactly: deterministic, every run, only on the
+      # oversized predicate.
+      #
+      # Rekor v2 fixes this at the protocol level: only a hash of the DSSE
+      # envelope's pre-auth encoding is uploaded, never the full payload
+      # (blog.sigstore.dev/rekor-v2-ga). The public sigstore.dev instance
+      # doesn't distribute the Rekor v2 URL via TUF for SIGNING yet (only for
+      # VERIFICATION), so opting in requires an explicit SigningConfig — per
+      # Sigstore's own documented early-adopter path: take a copy of the live
+      # TUF-distributed production SigningConfig and override only
+      # `rekorTlogUrls` to add the v2 log ahead of the v1 log.
+      #
+      # DELIBERATELY SCOPED: only "Attest container image SBOM" gets
+      # --signing-config. "Sign container image" and "Attest container image
+      # provenance" already succeed against Rekor v1 — no reason to touch
+      # working steps.
+      #
+      # WHY FETCHED LIVE, NOT COMMITTED: Sigstore explicitly warns the 2025
+      # Rekor v2 instance (log2025-1.rekor.sigstore.dev) will be retired when
+      # a 2026 instance replaces it, and advises against hardcoding the URL
+      # into pipelines that can't be easily updated. Fetching
+      # sigstore/root-signing's production signing_config.v0.2.json fresh on
+      # every run means the Fulcio/OIDC/TSA sections never go stale — only
+      # the Rekor v2 URL we inject below is a value we own and must revisit.
+      #
+      # CHECKPOINT: re-verify log2025-1.rekor.sigstore.dev is still current by
+      # 2026-12-31. Check https://blog.sigstore.dev for a log-rotation
+      # announcement, or inspect
+      # https://github.com/sigstore/root-signing/blob/main/targets/signing_config.v0.2.json
+      # directly — if TUF now distributes v2 as the default signing target,
+      # this entire step becomes unnecessary and should be deleted.
+      - name: Build Rekor v2 signing config for SBOM attestation
+        run: |
+          set -euo pipefail
+
+          PRODUCTION_CONFIG_URL="https://raw.githubusercontent.com/sigstore/root-signing/main/targets/signing_config.v0.2.json"
+          OUT_FILE="rekor-v2-signing-config.json"
+
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-delay 5 \
+            -o production-signing-config.json \
+            "${PRODUCTION_CONFIG_URL}"
+
+          # Fail loudly rather than silently proceeding on an unexpected
+          # payload (e.g. GitHub serving an HTML error page instead of JSON,
+          # or root-signing changing the SigningConfig schema).
+          MEDIA_TYPE="$(jq -r '.mediaType // empty' production-signing-config.json)"
+          if [[ "${MEDIA_TYPE}" != "application/vnd.dev.sigstore.signingconfig.v0.2+json" ]]; then
+            echo "::error:: Fetched file from ${PRODUCTION_CONFIG_URL} does not look like a v0.2 Sigstore SigningConfig (mediaType='${MEDIA_TYPE}')."
+            exit 1
+          fi
+
+          # Prepend the 2025 Rekor v2 log ahead of the existing v1 entry.
+          # rekorTlogConfig.selector stays "ANY" (already set in the
+          # production file), so cosign accepts an entry from either log.
+          jq '.rekorTlogUrls = [{
+                "url": "https://log2025-1.rekor.sigstore.dev",
+                "majorApiVersion": 2,
+                "validFor": { "start": "2025-10-06T00:00:00Z" },
+                "operator": "sigstore.dev"
+              }] + .rekorTlogUrls' \
+            production-signing-config.json > "${OUT_FILE}"
+
+          # Sanity-check the patch actually landed before trusting this file
+          # for a real signing operation.
+          V2_URL="$(jq -r '.rekorTlogUrls[0].url' "${OUT_FILE}")"
+          V2_API_VERSION="$(jq -r '.rekorTlogUrls[0].majorApiVersion' "${OUT_FILE}")"
+          if [[ "${V2_URL}" != "https://log2025-1.rekor.sigstore.dev" || "${V2_API_VERSION}" != "2" ]]; then
+            echo "::error:: Rekor v2 entry missing or malformed after patching ${OUT_FILE}."
+            exit 1
+          fi
+
+          echo "::notice:: Rekor v2 signing config ready: ${OUT_FILE} (rekorTlogUrls[0] = ${V2_URL}, v${V2_API_VERSION})"
+
       # Attest the two per-platform SPDX SBOMs extracted above, mirroring the provenance-attest step (cosign appends, so both attestations coexist on the same digest).
       # SIMPLIFIED: retry logic lives in scripts/cosign-retry.sh, shared with sign and provenance attest.
+      # UPDATED (2026-08-23): --signing-config routes this attestation's
+      # Rekor entry to Rekor v2 (hashed upload — no practical payload size
+      # ceiling) instead of the TUF default (Rekor v1), which was rejecting
+      # this predicate outright due to size. See "Build Rekor v2 signing
+      # config for SBOM attestation" above for full rationale. Sign and
+      # provenance-attest are deliberately left on the default (Rekor v1) —
+      # they already succeed.
       - name: Attest container image SBOM
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -875,6 +967,7 @@ jobs:
             scripts/cosign-retry.sh cosign attest --yes \
               --type spdxjson \
               --predicate "${FILE}" \
+              --signing-config rekor-v2-signing-config.json \
               "${IMG}@${DIGEST}"
           done
       # Post-Publish Verification
