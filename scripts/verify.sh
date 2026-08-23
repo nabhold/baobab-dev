@@ -79,7 +79,9 @@ fi
 ###############################################################################
 
 say() {
-    [[ "$QUIET" -eq 0 ]] && printf '%b\n' "$1"
+    if [[ "$QUIET" -eq 0 ]]; then
+        printf '%b\n' "$1"
+    fi
 }
 
 ok() {
@@ -94,7 +96,9 @@ bad() {
 
 warnc() {
     WARN=$((WARN+1))
-    [[ "$QUIET" -eq 0 ]] && printf '  \033[1;33m•\033[0m %s\n' "$1"
+    if [[ "$QUIET" -eq 0 ]]; then
+        printf '  \033[1;33m•\033[0m %s\n' "$1"
+    fi
 }
 
 section() {
@@ -319,13 +323,7 @@ check_required "fd" fd
 check_required "bat" bat
 check_required "eza" eza
 check_required "fzf" fzf
-check_optional "tmux" tmux "tmux -V"
-check_required "Task" task "task --version"
-check_required "yq" yq "yq --version"
-# cosign version's actual output leads with an ASCII-art banner before the
-# GitVersion/GitCommit/etc. fields — filtering to the GitVersion line here
-# avoids run_version_cmd's `head -n1` capturing banner art instead.
-check_required "Cosign" cosign "cosign version | grep GitVersion"
+check_optional "tmux" tmux
 
 ###############################################################################
 # User
