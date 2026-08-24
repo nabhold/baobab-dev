@@ -119,11 +119,72 @@
        does that automatically, so it's declared here instead.
 ==============================================================================*/
 
+.landing-hero-bleed {
+
+    position: relative;
+    overflow: hidden;
+    background: var(--baobab-background);
+
+}
+
+[data-md-color-scheme="slate"] .landing-hero-bleed {
+
+    background: var(--baobab-background-dark);
+
+}
+
+.landing-hero-bleed .hero-bg {
+
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: right center;
+    pointer-events: none;
+    z-index: 0;
+    display: none;
+
+}
+
+@media (min-width: 1024px) {
+
+    .landing-hero-bleed .hero-bg {
+
+        display: block;
+
+    }
+
+}
+
+.landing-hero-bleed::before {
+
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+
+    background: linear-gradient(90deg,
+            var(--baobab-background) 0%,
+            var(--baobab-background) 46%,
+            transparent 82%);
+
+}
+
+[data-md-color-scheme="slate"] .landing-hero-bleed::before {
+
+    background: linear-gradient(90deg,
+            var(--baobab-background-dark) 0%,
+            var(--baobab-background-dark) 46%,
+            transparent 82%);
+
+}
+
 .landing-hero {
 
-    display: grid;
-    gap: var(--baobab-space-8);
-    align-items: center;
+    position: relative;
+    z-index: 2;
     max-width: var(--baobab-container-max);
     margin-inline: auto;
     padding-block: var(--baobab-space-12);
@@ -131,13 +192,65 @@
 
 }
 
-@media (min-width:1024px) {
+.hero-content {
 
-    .landing-hero {
+    max-width: 40rem;
 
-        grid-template-columns: 1.1fr 0.9fr;
+}
+
+@media (min-width: 1024px) {
+
+    .hero-content {
+
+        max-width: min(66vw, 42rem);
 
     }
+
+}
+
+.hero-kicker {
+
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: var(--baobab-tracking-wide);
+    font-size: var(--baobab-text-sm);
+    font-weight: var(--baobab-weight-semibold);
+    color: var(--baobab-green);
+    margin: 0 0 var(--baobab-space-3);
+
+}
+
+[data-md-color-scheme="slate"] .hero-kicker {
+
+    color: var(--baobab-green-light);
+
+}
+
+.landing-hero h1 {
+
+    font-size: var(--baobab-text-5xl);
+    line-height: var(--baobab-leading-tight);
+    letter-spacing: var(--baobab-tracking-tight);
+    margin: 0 0 var(--baobab-space-4);
+
+}
+
+@media (max-width: 480px) {
+
+    .landing-hero h1 {
+
+        font-size: var(--baobab-text-3xl);
+
+    }
+
+}
+
+.hero-lead {
+
+    font-size: var(--baobab-text-lg);
+    line-height: var(--baobab-leading-snug);
+    color: var(--md-default-fg-color--light);
+    margin: 0 0 var(--baobab-space-6);
 
 }
 
@@ -149,6 +262,7 @@
 
 }
 
+
 /*
   Technology Strip
 ==============================================================================*/
@@ -157,13 +271,63 @@
 
     display: grid;
 
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    /* Explicit column counts rather than auto-fit: auto-fit with a wide
+       desktop container was packing 7-8 narrow items into a single row
+       instead of a clean grid. Fixed steps instead: 2 columns on phones,
+       4 from tablet width up -- so any item count wraps into complete
+       rows of 4 at desktop rather than one uneven row. */
+    grid-template-columns: repeat(2, 1fr);
 
     gap: 1rem;
 
     text-align: center;
 
     margin-block: var(--baobab-space-10);
+
+}
+
+@media (min-width: 768px) {
+
+    .tech-strip {
+
+        grid-template-columns: repeat(4, 1fr);
+
+    }
+
+}
+
+.tech-strip+.tech-strip {
+
+    margin-top: calc(-1 * var(--baobab-space-8));
+
+}
+
+.tech-strip-label {
+
+    display: block;
+    text-align: left;
+    font-size: var(--baobab-text-sm);
+    font-weight: var(--baobab-weight-semibold);
+    color: var(--md-default-fg-color--light);
+    text-transform: uppercase;
+    letter-spacing: var(--baobab-tracking-wide);
+    margin: 0 0 var(--baobab-space-3);
+
+}
+
+.tech-item {
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+
+}
+
+.tech-item .twemoji {
+
+    font-size: 1.1rem;
+    flex-shrink: 0;
 
 }
 
@@ -277,6 +441,21 @@
 
     min-height: 220px;
 
+    padding: 1.5rem;
+
+    border: 1px solid var(--baobab-border);
+
+    border-radius: var(--baobab-radius-small);
+
+    background: var(--baobab-surface);
+
+}
+
+[data-md-color-scheme="slate"] .documentation-card {
+
+    background: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+
 }
 
 
@@ -347,9 +526,62 @@
 
 }
 
-.footer-grid h3 {
+.footer-grid h4 {
 
     margin-bottom: 0.75rem;
+
+}
+
+/*
+  Root cause of the light-mode invisibility bug: .md-footer-directory
+  deliberately overrides its OWN background (surface / surface-dark per
+  scheme, below) but everything inside .md-footer still inherits
+  --md-footer-fg-color from palette.css, which is hard-coded to
+  --baobab-background (white) for the LIGHT scheme -- because Material's
+  own convention is a permanently dark footer band with white text,
+  regardless of site theme. That's correct for .md-footer__inner /
+  .md-footer-meta (which keep the dark --baobab-primary background), but
+  .md-footer-directory opted OUT of that dark background in light mode
+  without also opting out of the inherited white text -- white text on
+  --baobab-surface (#F8FAFC) is effectively invisible. Fixed by setting
+  an explicit, scheme-correct foreground color here rather than relying
+  on inheritance from a token that assumes a permanently dark band.
+*/
+
+.footer-grid h4,
+.footer-grid a,
+.footer-grid li,
+.footer-grid .twemoji {
+
+    color: var(--baobab-text);
+
+}
+
+[data-md-color-scheme="slate"] .footer-grid h4,
+[data-md-color-scheme="slate"] .footer-grid a,
+[data-md-color-scheme="slate"] .footer-grid li,
+[data-md-color-scheme="slate"] .footer-grid .twemoji {
+
+    color: var(--baobab-text-dark);
+
+}
+
+.footer-grid a {
+
+    text-decoration: none;
+
+}
+
+.footer-grid a:hover {
+
+    color: var(--baobab-green);
+    text-decoration: underline;
+
+}
+
+[data-md-color-scheme="slate"] .footer-grid a:hover {
+
+    color: var(--baobab-green-light);
 
 }
 
@@ -375,11 +607,17 @@
   Responsive Landing Hero
 ==============================================================================*/
 
-@media (max-width:1023px) {
+@media (max-width: 1023px) {
 
     .landing-hero {
 
         text-align: center;
+
+    }
+
+    .hero-content {
+
+        margin-inline: auto;
 
     }
 
@@ -390,6 +628,7 @@
     }
 
 }
+
 
 /*==============================================================================
   Feature Grid
@@ -889,4 +1128,3 @@
         grid-template-columns: 1fr;
     }
 }
-

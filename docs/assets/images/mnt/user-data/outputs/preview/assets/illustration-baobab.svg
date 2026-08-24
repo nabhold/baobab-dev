@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-hidden="true" focusable="false">
+  <!--
+    BAOBAB hero illustration — replacement for the stock Material for
+    MkDocs "people at dashboards" art.
+
+    Theme: layered dev containers (Docker/Codespaces), a code/terminal
+    panel, and a supply-chain "signed & verified" badge — i.e. the
+    actual product story (deterministic multi-arch builds, Codespaces
+    parity, keyless Cosign signing) rather than generic stock people.
+
+    Structure, for CSS/JS reuse:
+      #bg-shapes   — very low-contrast background blobs, static
+      #containers  — the stacked isometric container group, static
+                     (keeps the "anchor" of the image still and legible
+                     behind hero text)
+      .drift       — small accent elements only (nodes, badge, cursor)
+                     intended to receive the *existing* baobab-float
+                     ambient animation via CSS class, same convention
+                     already used for .hero-logo.float. Nothing large
+                     or high-contrast is animated, to stay legible as a
+                     full-bleed text background and to keep the motion
+                     tasteful under prefers-reduced-motion fallback
+                     (static = still a complete, correct image).
+
+    Palette: driven by literal hex values matching palette.css's
+    baobab tokens (SVG files can't consume CSS custom properties
+    from the host document unless inlined, so values are duplicated
+    here deliberately — keep in sync if the palette changes).
+  -->
+
+  <defs>
+    <style><![CDATA[
+      /* Self-contained ambient motion — this file is consumed via an
+         img/background-image reference in hero.html, so animation must
+         be defined here rather than in the host page's CSS, which
+         cannot reach inside an externally-referenced SVG's internals.
+         Mirrors the project's existing baobab-float convention
+         (animations.css): small accent elements drift gently; nothing
+         large or high-contrast moves, so it stays legible as text
+         background. */
+      @keyframes drift {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-10px); }
+      }
+      .drift { animation: drift 5s ease-in-out infinite; transform-origin: center; }
+      [data-drift="slow"]   { animation-duration: 7s; }
+      [data-drift="medium"] { animation-duration: 5s; animation-delay: .4s; }
+      [data-drift="fast"]   { animation-duration: 4s; animation-delay: .8s; }
+
+      @keyframes cursor-blink {
+        0%, 49%   { opacity: 1; }
+        50%, 100% { opacity: 0; }
+      }
+      .drift-cursor { animation: cursor-blink 1s step-end infinite; }
+
+      /* Hard requirement per project convention: motion must not be
+         forced on users who have asked the OS to reduce it. */
+      @media (prefers-reduced-motion: reduce) {
+        .drift, .drift-cursor {
+          animation: none !important;
+        }
+      }
+    ]]></style>
+    <linearGradient id="containerFace" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#374151"/>
+      <stop offset="100%" stop-color="#1F2937"/>
+    </linearGradient>
+    <linearGradient id="containerTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4B5563"/>
+      <stop offset="100%" stop-color="#374151"/>
+    </linearGradient>
+    <linearGradient id="containerSide" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1F2937"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ============================== Background ============================== -->
+  <g id="bg-shapes" fill="#4E7A44" opacity="0.05">
+    <ellipse cx="1180" cy="260" rx="520" ry="420"/>
+    <ellipse cx="1350" cy="720" rx="380" ry="300"/>
+  </g>
+  <g id="bg-shapes-2" fill="#C89A2B" opacity="0.05">
+    <ellipse cx="1420" cy="180" rx="260" ry="220"/>
+  </g>
+
+  <!-- ============================== Connection lines ============================== -->
+  <g stroke="#4E7A44" stroke-width="2" stroke-dasharray="6 8" opacity="0.35" fill="none">
+    <path d="M1040 480 C 1180 420, 1260 380, 1340 300"/>
+    <path d="M1040 560 C 1180 620, 1260 660, 1330 700"/>
+    <path d="M980 420 C 950 320, 960 220, 1030 150"/>
+  </g>
+
+  <!-- ============================== Container stack ============================== -->
+  <g id="containers">
+    <!-- bottom container -->
+    <g transform="translate(760,560)">
+      <polygon points="0,60 220,-40 440,60 220,160" fill="url(#containerTop)"/>
+      <polygon points="0,60 220,160 220,300 0,200" fill="url(#containerSide)"/>
+      <polygon points="220,160 440,60 440,200 220,300" fill="url(#containerFace)"/>
+      <!-- port/vent detail -->
+      <g stroke="#7FB06E" stroke-width="4" opacity="0.6">
+        <line x1="250" y1="200" x2="410" y2="122"/>
+        <line x1="250" y1="220" x2="410" y2="142"/>
+        <line x1="250" y1="240" x2="410" y2="162"/>
+      </g>
+    </g>
+
+    <!-- middle container, offset up-left -->
+    <g transform="translate(620,400)">
+      <polygon points="0,60 220,-40 440,60 220,160" fill="url(#containerTop)"/>
+      <polygon points="0,60 220,160 220,300 0,200" fill="url(#containerSide)"/>
+      <polygon points="220,160 440,60 440,200 220,300" fill="url(#containerFace)"/>
+      <g stroke="#E4C878" stroke-width="4" opacity="0.7">
+        <line x1="250" y1="200" x2="410" y2="122"/>
+        <line x1="250" y1="220" x2="410" y2="142"/>
+        <line x1="250" y1="240" x2="410" y2="162"/>
+      </g>
+    </g>
+
+    <!-- top container -->
+    <g transform="translate(760,240)">
+      <polygon points="0,60 220,-40 440,60 220,160" fill="url(#containerTop)"/>
+      <polygon points="0,60 220,160 220,300 0,200" fill="url(#containerSide)"/>
+      <polygon points="220,160 440,60 440,200 220,300" fill="url(#containerFace)"/>
+      <g stroke="#7FB06E" stroke-width="4" opacity="0.6">
+        <line x1="250" y1="200" x2="410" y2="122"/>
+        <line x1="250" y1="220" x2="410" y2="142"/>
+        <line x1="250" y1="240" x2="410" y2="162"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- ============================== Terminal / code panel ============================== -->
+  <g class="drift" data-drift="slow" transform="translate(1080,340)">
+    <rect x="0" y="0" width="360" height="240" rx="14" fill="#111827" opacity="0.96"/>
+    <rect x="0" y="0" width="360" height="34" rx="14" fill="#1F2937"/>
+    <rect x="0" y="20" width="360" height="14" fill="#1F2937"/>
+    <circle cx="22" cy="17" r="6" fill="#B3261E"/>
+    <circle cx="42" cy="17" r="6" fill="#C89A2B"/>
+    <circle cx="62" cy="17" r="6" fill="#4E7A44"/>
+    <g fill="#7FB06E" font-family="ui-monospace, SFMono-Regular, monospace" font-size="15">
+      <text x="24" y="70">$ baobab-verify</text>
+      <text x="24" y="96" fill="#E4C878">✓ toolchain match</text>
+      <text x="24" y="122" fill="#E4C878">✓ signature valid</text>
+      <text x="24" y="148" fill="#E4C878">✓ SBOM attested</text>
+      <text x="24" y="174" fill="#9CA3AF">$ <tspan class="drift-cursor">▍</tspan></text>
+    </g>
+  </g>
+
+  <!-- ============================== Signed / verified badge ============================== -->
+  <g class="drift" data-drift="fast" transform="translate(1300,560)">
+    <circle r="46" fill="#4E7A44"/>
+    <path d="M -18 0 L -6 14 L 20 -16" stroke="#FFFFFF" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- ============================== Cloud / Codespaces node ============================== -->
+  <g class="drift" data-drift="medium" transform="translate(560,150)" fill="#C89A2B" opacity="0.9">
+    <path d="M0 20 a20 20 0 0 1 4 -39.6 a26 26 0 0 1 50 6 a18 18 0 0 1 -2 33.6 Z"/>
+  </g>
+</svg>

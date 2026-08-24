@@ -1,0 +1,2581 @@
+/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Design Tokens — Palette
+
+  File:
+      docs/assets/stylesheets/palette.css
+==============================================================================*/
+
+:root {
+
+   /* ---------------------------------------------------------------------
+       Primary Brand
+       --------------------------------------------------------------------- */
+
+   --baobab-primary: #1F2937;
+   /* text-safe on light surfaces, ~14.6:1 on white (DO NOT USE FOR TEXT ON DARK SURFACES) */
+   --baobab-primary-light: #374151;
+   --baobab-secondary: #4B5563;
+
+   /* ---------------------------------------------------------------------
+       Accent Colours
+       --------------------------------------------------------------------- */
+
+   --baobab-green: #4E7A44;
+   /* text-safe on white, ~5:1 — do not lighten further */
+   --baobab-green-dark: #35552D;
+   /* higher-contrast variant for links / small text */
+   --baobab-green-light: #7FB06E;
+   /* dark-mode variant, ~5:1 on --baobab-background-dark */
+
+   --baobab-gold: #C89A2B;
+   /* DECORATIVE ONLY — ~2.6:1 on white, fails AA for text */
+   --baobab-gold-dark: #8A6B1D;
+   /* text-safe gold, ~4.6:1 on white — use this for gold text/links */
+   --baobab-gold-light: #E4C878;
+   /* dark-mode decorative accent */
+
+   /* ---------------------------------------------------------------------
+       Surfaces — Light
+       --------------------------------------------------------------------- */
+
+   --baobab-background: #FFFFFF;
+   --baobab-surface: #F8FAFC;
+   --baobab-border: #E5E7EB;
+
+   /* ---------------------------------------------------------------------
+       Surfaces — Dark
+       --------------------------------------------------------------------- */
+
+   --baobab-background-dark: #111827;
+   --baobab-surface-dark: #1F2937;
+   --baobab-border-dark: #374151;
+
+   /* ---------------------------------------------------------------------
+       Typography Colours
+       --------------------------------------------------------------------- */
+
+   --baobab-text: var(--baobab-primary);
+   --baobab-text-light: #6B7280;
+   /* text-safe on white, ~4.8:1 — borderline, don't shrink font size */
+
+   --baobab-text-dark: #F3F4F6;
+   /* body text on dark surfaces */
+   --baobab-text-dark-light: #9CA3AF;
+   /* secondary text on dark surfaces */
+
+   /* ---------------------------------------------------------------------
+       Semantic / Status
+       --------------------------------------------------------------------- */
+
+   --baobab-success: var(--baobab-green);
+   --baobab-warning: var(--baobab-gold-dark);
+   --baobab-danger: #B3261E;
+   --baobab-info: #2B6CB0;
+
+   /* ---------------------------------------------------------------------
+       Interactive States
+       --------------------------------------------------------------------- */
+
+   --baobab-focus-ring: #2563EB;
+   --baobab-focus-ring-offset: 2px;
+   --baobab-hover-overlay: rgba(0, 0, 0, 0.04);
+   --baobab-hover-overlay-dark: rgba(255, 255, 255, 0.06);
+
+   /* ---------------------------------------------------------------------
+       Layout
+       --------------------------------------------------------------------- */
+
+   --baobab-radius: 12px;
+   --baobab-radius-small: 8px;
+
+   /* ---------------------------------------------------------------------
+       Shadows
+       --------------------------------------------------------------------- */
+
+   --baobab-shadow-small: 0 4px 12px rgba(0, 0, 0, 0.06);
+   --baobab-shadow-large: 0 15px 40px rgba(0, 0, 0, 0.08);
+   --baobab-shadow-small-dark: 0 4px 12px rgba(0, 0, 0, 0.35);
+   --baobab-shadow-large-dark: 0 15px 40px rgba(0, 0, 0, 0.45);
+
+}
+
+/*==============================================================================
+  Material for MkDocs Bridge — Light Scheme
+==============================================================================*/
+
+[data-md-color-scheme="default"] {
+
+   --md-primary-fg-color: var(--baobab-primary);
+   --md-primary-fg-color--light: var(--baobab-primary-light);
+   --md-primary-fg-color--dark: var(--baobab-primary);
+   --md-primary-bg-color: var(--baobab-background);
+   --md-primary-bg-color--light: var(--baobab-surface);
+
+   --md-accent-fg-color: var(--baobab-green);
+   --md-accent-fg-color--transparent: rgba(78, 122, 68, 0.1);
+   --md-accent-bg-color: var(--baobab-background);
+
+   --md-default-fg-color: var(--baobab-text);
+   --md-default-fg-color--light: var(--baobab-text-light);
+   --md-default-bg-color: var(--baobab-background);
+
+   --md-typeset-a-color: var(--baobab-green-dark);
+
+   --md-footer-bg-color: var(--baobab-primary);
+   --md-footer-fg-color: var(--baobab-background);
+
+}/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Design Tokens — Typography
+
+  File:
+      docs/assets/stylesheets/typography-tokens.css
+
+  Purpose:
+      Single source of truth for font stacks, the type scale, weights,
+      line-heights and letter-spacing. typography.css consumes these;
+      it should not declare raw font-size/weight/family values itself.
+
+  Note on font choice:
+      Deliberately uses a system-font stack rather than a hosted webfont
+      (Google Fonts, etc). Rationale: zero third-party network request
+      (no CSP entanglement, no privacy/tracking surface for a platform
+      whose own docs emphasise security-by-design), faster first paint,
+      and no FOUT/FOIT to manage. If Baobab adopts a brand typeface later,
+      add the @font-face block in typography.css and repoint
+      --baobab-font-sans below — every consumer updates automatically.
+==============================================================================*/
+
+:root {
+
+    /* ---------------------------------------------------------------------
+       Font Stacks
+       --------------------------------------------------------------------- */
+
+    --baobab-font-sans:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+        Arial, "Noto Sans", sans-serif;
+
+    --baobab-font-mono:
+        ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
+        "Liberation Mono", monospace;
+
+    /* ---------------------------------------------------------------------
+       Type Scale
+       (1.25 ratio, 16px base — matches Material's default root size so
+       relative units stay predictable inside .md-typeset)
+       --------------------------------------------------------------------- */
+
+    --baobab-text-xs:   0.75rem;   /* 12px — captions, meta */
+    --baobab-text-sm:   0.875rem;  /* 14px — secondary body */
+    --baobab-text-base: 1rem;      /* 16px — body */
+    --baobab-text-lg:   1.125rem;  /* 18px — lead paragraph */
+    --baobab-text-xl:   1.25rem;   /* 20px — h4 */
+    --baobab-text-2xl:  1.563rem;  /* 25px — h3 */
+    --baobab-text-3xl:  1.953rem;  /* 31px — h2 */
+    --baobab-text-4xl:  2.441rem;  /* 39px — h1 */
+    --baobab-text-5xl:  3.052rem;  /* 49px — hero headline */
+
+    /* ---------------------------------------------------------------------
+       Weights
+       --------------------------------------------------------------------- */
+
+    --baobab-weight-regular: 400;
+    --baobab-weight-medium: 500;
+    --baobab-weight-semibold: 600;
+    --baobab-weight-bold: 700;
+
+    /* ---------------------------------------------------------------------
+       Line Heights
+       --------------------------------------------------------------------- */
+
+    --baobab-leading-tight: 1.15;   /* headings */
+    --baobab-leading-snug: 1.35;    /* sub-headings, lead text */
+    --baobab-leading-normal: 1.6;   /* body copy */
+    --baobab-leading-relaxed: 1.75; /* long-form / governance docs */
+
+    /* ---------------------------------------------------------------------
+       Letter Spacing
+       --------------------------------------------------------------------- */
+
+    --baobab-tracking-tight: -0.02em;  /* large display headings */
+    --baobab-tracking-normal: 0;
+    --baobab-tracking-wide: 0.04em;    /* eyebrow / kicker text, e.g. "AI-Powered • Enterprise-Ready" */
+
+}
+
+
+/*==============================================================================
+  End of File
+==============================================================================*/
+/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Typography
+
+  File:
+      docs/assets/stylesheets/typography.css
+==============================================================================*/
+
+/*==============================================================================
+  Base
+==============================================================================*/
+
+body {
+    font-family: var(--baobab-font-sans);
+}
+
+.md-typeset code,
+.md-typeset pre,
+.md-typeset kbd {
+    font-family: var(--baobab-font-mono);
+}
+
+/*==============================================================================
+  Headings
+==============================================================================*/
+
+.md-typeset h1 {
+    font-size: var(--baobab-text-4xl);
+    font-weight: var(--baobab-weight-bold);
+    line-height: var(--baobab-leading-tight);
+    letter-spacing: var(--baobab-tracking-tight);
+    color: var(--baobab-text);
+}
+
+/* FIX: Ensure H1 remains visible in dark mode */
+[data-md-color-scheme="slate"] .md-typeset h1 {
+    color: var(--baobab-text-dark);
+}
+
+.md-typeset h2 {
+    font-size: var(--baobab-text-3xl);
+    font-weight: var(--baobab-weight-semibold);
+    line-height: var(--baobab-leading-tight);
+    letter-spacing: var(--baobab-tracking-tight);
+}
+
+.md-typeset h3 {
+    font-size: var(--baobab-text-2xl);
+    font-weight: var(--baobab-weight-semibold);
+    line-height: var(--baobab-leading-snug);
+}
+
+.md-typeset h4 {
+    font-size: var(--baobab-text-xl);
+    font-weight: var(--baobab-weight-medium);
+    line-height: var(--baobab-leading-snug);
+}
+
+/*==============================================================================
+  Body Copy
+==============================================================================*/
+
+.md-typeset p,
+.md-typeset li {
+    font-size: var(--baobab-text-base);
+    line-height: var(--baobab-leading-normal);
+}
+
+.md-typeset p.lead {
+    font-size: var(--baobab-text-lg);
+    line-height: var(--baobab-leading-snug);
+    color: var(--baobab-text-light);
+}
+
+/*==============================================================================
+  Links
+==============================================================================*/
+
+.md-typeset a {
+    font-weight: var(--baobab-weight-medium);
+    text-decoration: none;
+}
+
+.md-typeset a:hover,
+.md-typeset a:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+}
+
+/*==============================================================================
+  Hero Text
+==============================================================================*/
+
+.hero h1 {
+    font-size: var(--baobab-text-5xl);
+    letter-spacing: var(--baobab-tracking-tight);
+}
+
+.hero h3 {
+    font-size: var(--baobab-text-lg);
+    font-weight: var(--baobab-weight-medium);
+    letter-spacing: var(--baobab-tracking-wide);
+    text-transform: uppercase;
+    color: var(--baobab-text-light);
+}
+
+[data-md-color-scheme="slate"] .hero h3 {
+    color: var(--baobab-text-dark-light);
+}
+
+/*==============================================================================
+  Blockquotes
+==============================================================================*/
+
+.md-typeset blockquote {
+    border-left: 4px solid var(--baobab-green);
+    font-size: var(--baobab-text-lg);
+    font-weight: var(--baobab-weight-medium);
+    line-height: var(--baobab-leading-snug);
+    color: var(--baobab-text);
+    font-style: normal;
+}
+
+[data-md-color-scheme="slate"] .md-typeset blockquote {
+    color: var(--baobab-text-dark);
+}/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Layout
+
+  File:
+      docs/assets/stylesheets/layout.css
+
+  Purpose:
+      Structural rules only — spacing scale, containers, breakpoints and
+      the responsive grid mechanics behind index.md's `.grid.cards`
+      blocks. Visual styling (colour, shadow, radius) of the elements
+      inside these grids belongs in components.css, not here.
+
+  Breakpoints:
+      CSS custom properties cannot be referenced inside @media
+      conditions, so breakpoint values are documented here for
+      consistency across files but must be repeated literally at each
+      @media rule:
+
+          --baobab-bp-sm   480px   (large phones)
+          --baobab-bp-md   768px   (tablets)
+          --baobab-bp-lg   1024px  (small desktop)
+          --baobab-bp-xl   1280px  (desktop)
+==============================================================================*/
+
+:root {
+
+    /* ---------------------------------------------------------------------
+       Spacing Scale
+       (0.25rem base increment — consumed by utilities.css and by
+       component-level padding/margin throughout)
+       --------------------------------------------------------------------- */
+
+    --baobab-space-1: 0.25rem;
+    --baobab-space-2: 0.5rem;
+    --baobab-space-3: 0.75rem;
+    --baobab-space-4: 1rem;
+    --baobab-space-5: 1.5rem;
+    --baobab-space-6: 2rem;
+    --baobab-space-8: 3rem;
+    --baobab-space-10: 4rem;
+    --baobab-space-12: 6rem;
+
+    /* ---------------------------------------------------------------------
+       Containers
+       --------------------------------------------------------------------- */
+
+    --baobab-container-max: 76rem;      /* 1216px */
+    --baobab-container-padding: var(--baobab-space-4);
+
+}
+
+
+/*==============================================================================
+  Section Rhythm
+  index.md separates thematic blocks with `---` (Markdown horizontal
+  rules); Material renders these as <hr>. Using that existing structural
+  marker to create consistent vertical rhythm between sections avoids
+  asking content authors to add wrapper divs per section.
+==============================================================================*/
+
+.md-typeset hr {
+
+    margin: var(--baobab-space-10) 0;
+    border: none;
+    border-top: 1px solid var(--baobab-border);
+
+}
+
+[data-md-color-scheme="slate"] .md-typeset hr {
+
+    border-top-color: var(--baobab-border-dark);
+
+}
+
+@media (min-width: 768px) {
+
+    .md-typeset hr {
+
+        margin: var(--baobab-space-12) 0;
+
+    }
+
+}
+
+
+/*==============================================================================
+  Hero Layout
+==============================================================================*/
+
+.hero {
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--baobab-space-4);
+    padding: var(--baobab-space-10) var(--baobab-container-padding) var(--baobab-space-8);
+    max-width: var(--baobab-container-max);
+    margin-inline: auto;
+
+}
+
+.hero-logo {
+
+    width: 96px;
+    height: 96px;
+
+}
+
+@media (min-width: 768px) {
+
+    .hero {
+
+        padding-top: var(--baobab-space-12);
+        gap: var(--baobab-space-5);
+
+    }
+
+    .hero-logo {
+
+        width: 128px;
+        height: 128px;
+
+    }
+
+}
+
+
+/*==============================================================================
+  Card Grid
+  Overrides Material's default `.grid.cards` mechanics (Material ships
+  a 1-column mobile / auto-fit desktop grid already; this asserts
+  Baobab's own breakpoints and gap scale explicitly rather than relying
+  on Material's internal defaults, which may change between releases).
+==============================================================================*/
+
+.md-typeset .grid.cards {
+
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--baobab-space-4);
+    margin: var(--baobab-space-6) 0;
+
+}
+
+@media (min-width: 480px) {
+
+    .md-typeset .grid.cards {
+
+        grid-template-columns: repeat(2, 1fr);
+
+    }
+
+}
+
+@media (min-width: 1024px) {
+
+    .md-typeset .grid.cards {
+
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--baobab-space-5);
+
+    }
+
+}
+
+/* index.md's "Platform Architecture" and "Explore the Documentation"
+   grids read better at 2-up on large screens given their longer body
+   copy — opt in per-section via a modifier class, e.g.
+   <div class="grid cards grid--wide" markdown> */
+
+@media (min-width: 1024px) {
+
+    .md-typeset .grid.cards.grid--wide {
+
+        grid-template-columns: repeat(2, 1fr);
+
+    }
+
+}
+
+
+/*==============================================================================
+  End of File
+==============================================================================*/
+/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Components
+
+  File:
+      docs/assets/stylesheets/components.css
+==============================================================================*/
+
+/*==============================================================================
+  Buttons
+==============================================================================*/
+
+.md-typeset .md-button {
+    border-radius: var(--baobab-radius-small);
+    font-weight: var(--baobab-weight-medium);
+    padding: 0.625em 1.5em;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.md-typeset .md-button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--baobab-shadow-small);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button:hover {
+    box-shadow: var(--baobab-shadow-small-dark);
+}
+
+.md-typeset .md-button--primary {
+    background-color: var(--baobab-green);
+    border-color: var(--baobab-green);
+    color: #FFFFFF;
+}
+
+.md-typeset .md-button--primary:hover {
+    background-color: var(--baobab-green-dark);
+    border-color: var(--baobab-green-dark);
+}
+
+/* FIX: Primary Button Dark Mode Parity */
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary {
+    background-color: var(--baobab-green-light);
+    border-color: var(--baobab-green-light);
+    color: var(--baobab-background-dark);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary:hover {
+    background-color: var(--baobab-green);
+    border-color: var(--baobab-green);
+}
+
+/*==============================================================================
+  Card Grid Items
+==============================================================================*/
+
+.md-typeset .grid.cards>ul>li,
+.md-typeset .grid.cards>ol>li {
+    background-color: var(--baobab-surface);
+    border: 1px solid var(--baobab-border);
+    border-radius: var(--baobab-radius);
+    box-shadow: var(--baobab-shadow-small);
+    padding: var(--baobab-space-5);
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.md-typeset .grid.cards>ul>li:hover,
+.md-typeset .grid.cards>ol>li:hover {
+    box-shadow: var(--baobab-shadow-large);
+    transform: translateY(-2px);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards>ul>li,
+[data-md-color-scheme="slate"] .md-typeset .grid.cards>ol>li {
+    background-color: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+    box-shadow: var(--baobab-shadow-small-dark);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards>ul>li:hover,
+[data-md-color-scheme="slate"] .md-typeset .grid.cards>ol>li:hover {
+    box-shadow: var(--baobab-shadow-large-dark);
+}
+
+.md-typeset .grid.cards>ul>li> :first-child,
+.md-typeset .grid.cards>ol>li> :first-child {
+    color: var(--baobab-green);
+    font-size: 2rem;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid.cards>ul>li> :first-child,
+[data-md-color-scheme="slate"] .md-typeset .grid.cards>ol>li> :first-child {
+    color: var(--baobab-green-light);
+}
+
+/*==============================================================================
+  Scroll-To-Top Button
+==============================================================================*/
+
+.scroll-top {
+    position: fixed;
+    right: var(--baobab-space-4);
+    bottom: var(--baobab-space-4);
+    z-index: 50;
+    width: 44px;
+    height: 44px;
+    border: none;
+    border-radius: 50%;
+    background-color: var(--baobab-primary);
+    color: #FFFFFF;
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: var(--baobab-shadow-large);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(8px);
+}
+
+.scroll-top:hover {
+    background-color: var(--baobab-primary-light);
+}
+
+.scroll-top.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+/*==============================================================================
+  Clipboard Copy Feedback
+==============================================================================*/
+
+.md-clipboard.copied::after {
+    content: "Copied";
+    position: absolute;
+    right: 0;
+    top: -1.75em;
+    font-size: var(--baobab-text-xs);
+    font-weight: var(--baobab-weight-medium);
+    color: #FFFFFF;
+    background-color: var(--baobab-primary);
+    border-radius: var(--baobab-radius-small);
+    padding: 0.2em 0.6em;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* FIX: Floating Component Dark Mode Parity */
+[data-md-color-scheme="slate"] .scroll-top,
+[data-md-color-scheme="slate"] .md-clipboard.copied::after {
+    background-color: var(--baobab-primary-light);
+}
+
+/*==============================================================================
+  Focus Visibility
+==============================================================================*/
+
+.md-typeset a:focus-visible,
+.md-typeset .md-button:focus-visible,
+.scroll-top:focus-visible {
+    outline: 2px solid var(--baobab-focus-ring);
+    outline-offset: var(--baobab-focus-ring-offset);
+    border-radius: var(--baobab-radius-small);
+}
+
+/*==============================================================================
+  External Link Indicator
+==============================================================================*/
+
+.md-typeset a[target="_blank"]:not(.md-button)::after {
+    content: "↗";
+    display: inline-block;
+    margin-left: 0.2em;
+    font-size: 0.85em;
+}/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Utilities
+
+  File:
+      docs/assets/stylesheets/utilities.css
+==============================================================================*/
+
+/*==============================================================================
+  Spacing — Margin Top
+==============================================================================*/
+
+.mt-0 {
+  margin-top: 0;
+}
+
+.mt-1 {
+  margin-top: var(--baobab-space-1);
+}
+
+.mt-2 {
+  margin-top: var(--baobab-space-2);
+}
+
+.mt-3 {
+  margin-top: var(--baobab-space-3);
+}
+
+.mt-4 {
+  margin-top: var(--baobab-space-4);
+}
+
+.mt-6 {
+  margin-top: var(--baobab-space-6);
+}
+
+.mt-8 {
+  margin-top: var(--baobab-space-8);
+}
+
+/*==============================================================================
+  Spacing — Margin Bottom
+==============================================================================*/
+
+.mb-0 {
+  margin-bottom: 0;
+}
+
+.mb-2 {
+  margin-bottom: var(--baobab-space-2);
+}
+
+.mb-4 {
+  margin-bottom: var(--baobab-space-4);
+}
+
+.mb-6 {
+  margin-bottom: var(--baobab-space-6);
+}
+
+/*==============================================================================
+  Text Alignment
+==============================================================================*/
+
+.text-left {
+  text-align: left;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-right {
+  text-align: right;
+}
+
+/*==============================================================================
+  Visibility
+==============================================================================*/
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  /* FIX: Modern accessibility standard added */
+  white-space: nowrap;
+  border: 0;
+}
+
+/*==============================================================================
+  Motion Preference Escape Hatch
+==============================================================================*/
+
+.motion-safe-only {
+  animation: none !important;
+  transition: none !important;
+}/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Dark Theme — Material for MkDocs Bridge
+
+  File:
+      docs/assets/stylesheets/dark.css
+
+  Purpose:
+      Wires Baobab's dark-mode tokens (defined in palette.css) into
+      Material for MkDocs' CSS variable system for the "slate" scheme.
+
+  Activation:
+      Requires mkdocs.yml's dark palette entry to declare:
+          scheme: slate
+          primary: custom
+          accent: custom
+      (see the accompanying mkdocs.yml note — without `custom`, Material
+      falls back to its own stock slate swatch and these tokens are
+      never consulted.)
+
+  Depends on:
+      palette.css (must load first — see extra.css import order)
+==============================================================================*/
+
+[data-md-color-scheme="slate"] {
+
+    --md-primary-fg-color: var(--baobab-background-dark);
+    --md-primary-fg-color--light: var(--baobab-surface-dark);
+    --md-primary-fg-color--dark: var(--baobab-background-dark);
+    --md-primary-bg-color: var(--baobab-text-dark);
+    --md-primary-bg-color--light: var(--baobab-text-dark-light);
+
+    --md-accent-fg-color: var(--baobab-green-light);
+    --md-accent-fg-color--transparent: rgba(127, 176, 110, 0.15);
+    --md-accent-bg-color: var(--baobab-background-dark);
+
+    --md-default-fg-color: var(--baobab-text-dark);
+    --md-default-fg-color--light: var(--baobab-text-dark-light);
+    --md-default-bg-color: var(--baobab-background-dark);
+
+    --md-typeset-a-color: var(--baobab-green-light);
+
+    --md-footer-bg-color: var(--baobab-surface-dark);
+    --md-footer-fg-color: var(--baobab-text-dark);
+
+    /* Card / admonition surfaces read the primary surface tokens above;
+       component-level overrides (borders, shadows) live in components.css
+       and should reference --baobab-border-dark / --baobab-shadow-*-dark
+       rather than hard-coded hex, so a future brand refresh only touches
+       palette.css. */
+
+}
+
+
+/*==============================================================================
+  End of File
+==============================================================================*/
+/*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Animations & Transitions
+
+  File:
+      docs/assets/stylesheets/animations.css
+
+  Purpose:
+      Keyframes and transitions for classes toggled by extra.js, plus
+      the site-wide prefers-reduced-motion override.
+
+  Progressive-enhancement note:
+      Every animated element here has a fully visible, non-animated
+      default state. JS-added classes (.fade-in, .slide-up) trigger a
+      keyframe that plays FROM a transient hidden/offset state TO the
+      element's already-visible default — so if extra.js fails to load
+      or execute, content is never stuck hidden. This mirrors the
+      progressive-enhancement principle stated at the top of extra.js
+      itself.
+
+  Accessibility note:
+      The prefers-reduced-motion block below also neutralises
+      extra.js's `document.documentElement.style.scrollBehavior =
+      "smooth"` (an inline style) via `!important`, since a stylesheet
+      !important rule takes precedence over a non-important inline
+      style. This is a safety net, not a substitute for fixing
+      enableSmoothScrolling() in extra.js to check
+      window.matchMedia("(prefers-reduced-motion: reduce)") directly —
+      recommend applying that JS fix as well so the behaviour is
+      correct at the source, not just patched here.
+==============================================================================*/
+
+
+/*==============================================================================
+  Card / Content Reveal
+  Applied by extra.js's initialiseRevealAnimations() via
+  IntersectionObserver, to .grid.cards li elements.
+==============================================================================*/
+
+@keyframes baobab-fade-in {
+
+    from {
+
+        opacity: 0;
+        transform: translateY(16px);
+
+    }
+
+    to {
+
+        opacity: 1;
+        transform: translateY(0);
+
+    }
+
+}
+
+.fade-in {
+
+    animation: baobab-fade-in 0.5s ease-out;
+
+}
+
+
+/*==============================================================================
+  Hero Entrance
+  Applied by extra.js's initialiseHero() to .hero, once, on load.
+==============================================================================*/
+
+@keyframes baobab-slide-up {
+
+    from {
+
+        opacity: 0;
+        transform: translateY(24px);
+
+    }
+
+    to {
+
+        opacity: 1;
+        transform: translateY(0);
+
+    }
+
+}
+
+.slide-up {
+
+    animation: baobab-slide-up 0.6s ease-out;
+
+}
+
+
+/*==============================================================================
+  Hero Logo Float
+  Continuous ambient motion on the hero logo (class applied directly
+  in index.md's <img class="hero-logo float">).
+==============================================================================*/
+
+@keyframes baobab-float {
+
+    0%, 100% {
+
+        transform: translateY(0);
+
+    }
+
+    50% {
+
+        transform: translateY(-8px);
+
+    }
+
+}
+
+.float {
+
+    animation: baobab-float 4s ease-in-out infinite;
+
+}
+
+
+/*==============================================================================
+  Scroll-To-Top Transition
+  Base opacity/visibility/transform states are set in components.css;
+  the transition timing lives here.
+==============================================================================*/
+
+.scroll-top {
+
+    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
+
+}
+
+
+/*==============================================================================
+  Clipboard Copy Feedback Transition
+==============================================================================*/
+
+.md-clipboard.copied::after {
+
+    animation: baobab-fade-in 0.15s ease-out;
+
+}
+
+
+/*==============================================================================
+  Reduced Motion
+  Applies last (source order) so it overrides every animation/transition
+  declared above for users who have indicated a system-level preference
+  against motion. Per WCAG 2.3.3 (AAA) / general best practice, this is
+  treated as a hard requirement rather than a nice-to-have.
+==============================================================================*/
+
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+
+    }
+
+}
+
+
+/*==============================================================================
+  End of File
+==============================================================================*/
+@keyframes heart {
+
+    0%,
+    40%,
+    80%,
+    to {
+        transform: scale(1)
+    }
+
+    20%,
+    60% {
+        transform: scale(1.15)
+    }
+}
+
+.md-typeset .twitter {
+    color: #00acee
+}
+
+.md-typeset .mastodon {
+    color: #897ff8
+}
+
+.md-typeset .mdx-video {
+    width: auto
+}
+
+.md-typeset .mdx-video__inner {
+    height: 0;
+    padding-bottom: 56.138%;
+    position: relative;
+    width: 100%
+}
+
+.md-typeset .mdx-video iframe {
+    border: none;
+    height: 100%;
+    left: 0;
+    overflow: hidden;
+    position: absolute;
+    top: 0;
+    width: 100%
+}
+
+.md-typeset .mdx-heart {
+    animation: heart 1s infinite
+}
+
+.md-typeset .mdx-insiders {
+    color: #e91e63
+}
+
+.md-typeset .mdx-badge {
+    font-size: .85em
+}
+
+.md-typeset .mdx-badge--heart {
+    --md-typeset-a-color: #e92063;
+    --md-accent-fg-color: #ff4281;
+    --md-accent-fg-color--transparent: #e920631a;
+    color: #e91e63
+}
+
+.md-typeset .mdx-badge--heart .twemoji {
+    animation: heart 1s infinite
+}
+
+.md-typeset .mdx-badge--right {
+    float: right;
+    margin-left: .35em
+}
+
+[dir=ltr] .md-typeset .mdx-badge__icon {
+    border-top-left-radius: .1rem
+}
+
+[dir=rtl] .md-typeset .mdx-badge__icon {
+    border-top-right-radius: .1rem
+}
+
+[dir=ltr] .md-typeset .mdx-badge__icon {
+    border-bottom-left-radius: .1rem
+}
+
+[dir=rtl] .md-typeset .mdx-badge__icon {
+    border-bottom-right-radius: .1rem
+}
+
+.md-typeset .mdx-badge__icon {
+    background: var(--md-accent-fg-color--transparent);
+    padding: .2rem
+}
+
+.md-typeset .mdx-badge__icon:last-child {
+    border-radius: .1rem
+}
+
+[dir=ltr] .md-typeset .mdx-badge__text {
+    border-top-right-radius: .1rem
+}
+
+[dir=rtl] .md-typeset .mdx-badge__text {
+    border-top-left-radius: .1rem
+}
+
+[dir=ltr] .md-typeset .mdx-badge__text {
+    border-bottom-right-radius: .1rem
+}
+
+[dir=rtl] .md-typeset .mdx-badge__text {
+    border-bottom-left-radius: .1rem
+}
+
+.md-typeset .mdx-badge__text {
+    box-shadow: 0 0 0 1px inset var(--md-accent-fg-color--transparent);
+    padding: .2rem .3rem
+}
+
+.md-typeset .mdx-switch button {
+    cursor: pointer;
+    transition: opacity .25s
+}
+
+.md-typeset .mdx-switch button:focus,
+.md-typeset .mdx-switch button:hover {
+    opacity: .75
+}
+
+.md-typeset .mdx-switch button>code {
+    background-color: var(--md-primary-fg-color);
+    color: var(--md-primary-bg-color);
+    display: block
+}
+
+.md-typeset .mdx-columns ol,
+.md-typeset .mdx-columns ul {
+    column-count: 2
+}
+
+@media screen and (max-width:29.984375em) {
+
+    .md-typeset .mdx-columns ol,
+    .md-typeset .mdx-columns ul {
+        columns: initial
+    }
+}
+
+.md-typeset .mdx-columns li {
+    break-inside: avoid
+}
+
+.md-typeset .mdx-flags {
+    margin: 2em auto
+}
+
+.md-typeset .mdx-flags ol {
+    list-style: none
+}
+
+.md-typeset .mdx-flags ol li {
+    margin-bottom: 1em
+}
+
+.md-typeset .mdx-flags__item {
+    display: flex;
+    gap: .6rem
+}
+
+.md-typeset .mdx-flags__content {
+    display: flex;
+    flex: 1;
+    flex-direction: column
+}
+
+.md-typeset .mdx-flags__content span {
+    align-items: baseline;
+    display: inline-flex;
+    justify-content: space-between
+}
+
+.md-typeset .mdx-flags__content>span:nth-child(2) {
+    font-size: 80%
+}
+
+.md-typeset .mdx-flags__content code {
+    float: right
+}
+
+.md-typeset .mdx-social {
+    height: min(27rem, 80vw);
+    position: relative
+}
+
+.md-typeset .mdx-social:hover .mdx-social__image {
+    background-color: #e4e4e40d
+}
+
+.md-typeset .mdx-social__layer {
+    margin-top: 4rem;
+    position: absolute;
+    transform-style: preserve-3d;
+    transition: .25s cubic-bezier(.7, 0, .3, 1)
+}
+
+.md-typeset .mdx-social__layer:hover .mdx-social__label {
+    opacity: 1
+}
+
+.md-typeset .mdx-social__layer:hover .mdx-social__image {
+    background-color: #7f7f7ffc
+}
+
+.md-typeset .mdx-social__layer:hover~.mdx-social__layer {
+    opacity: 0
+}
+
+.md-typeset .mdx-social__image {
+    box-shadow: -.25rem .25rem .5rem #0000000d;
+    transform: rotate(-40deg) skew(15deg, 15deg) scale(.7);
+    transition: all .25s
+}
+
+.md-typeset .mdx-social__image img {
+    display: block
+}
+
+.md-typeset .mdx-social__label {
+    background-color: var(--md-default-fg-color--light);
+    color: var(--md-default-bg-color);
+    display: block;
+    opacity: 0;
+    padding: .2rem .4rem;
+    position: absolute;
+    transition: all .25s
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:nth-child(6) {
+    transform: translateY(-30px)
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:nth-child(5) {
+    transform: translateY(-20px)
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:nth-child(4) {
+    transform: translateY(-10px)
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:nth-child(3) {
+    transform: translateY(0)
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:nth-child(2) {
+    transform: translateY(10px)
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:first-child {
+    transform: translateY(20px)
+}
+
+.md-typeset .mdx-social:hover .mdx-social__layer:nth-child(0) {
+    transform: translateY(30px)
+}
+
+.md-banner {
+    color: var(--md-footer-fg-color--lighter)
+}
+
+.md-banner strong {
+    white-space: nowrap
+}
+
+.md-banner a,
+.md-banner strong {
+    color: var(--md-footer-fg-color)
+}
+
+.md-banner a:focus,
+.md-banner a:hover {
+    color: currentcolor
+}
+
+.md-banner a:focus .twemoji,
+.md-banner a:hover .twemoji {
+    background-color: var(--md-footer-fg-color);
+    box-shadow: none
+}
+
+.md-banner .twemoji {
+    border-radius: 100%;
+    box-shadow: inset 0 0 0 .05rem currentcolor;
+    display: inline-block;
+    height: 1.2rem;
+    padding: .25rem;
+    transition: all .25s;
+    vertical-align: bottom;
+    width: 1.2rem
+}
+
+.md-banner .twemoji svg {
+    display: block;
+    max-height: none
+}
+
+.md-typeset .mdx-iconsearch {
+    background-color: var(--md-default-bg-color);
+    border-radius: .1rem;
+    box-shadow: var(--md-shadow-z1);
+    position: relative;
+    transition: box-shadow 125ms
+}
+
+.md-typeset .mdx-iconsearch:focus-within,
+.md-typeset .mdx-iconsearch:hover {
+    box-shadow: var(--md-shadow-z2)
+}
+
+.md-typeset .mdx-iconsearch .md-input {
+    background: var(--md-default-bg-color);
+    box-shadow: none
+}
+
+[data-md-color-scheme=slate] .md-typeset .mdx-iconsearch .md-input {
+    background: var(--md-code-bg-color)
+}
+
+.md-typeset .mdx-iconsearch-result {
+    backface-visibility: hidden;
+    max-height: 50vh;
+    overflow-y: auto;
+    scrollbar-color: var(--md-default-fg-color--lighter) #0000;
+    scrollbar-width: thin;
+    touch-action: pan-y
+}
+
+.md-tooltip .md-typeset .mdx-iconsearch-result {
+    max-height: 10.25rem
+}
+
+.md-typeset .mdx-iconsearch-result::-webkit-scrollbar {
+    height: .2rem;
+    width: .2rem
+}
+
+.md-typeset .mdx-iconsearch-result::-webkit-scrollbar-thumb {
+    background-color: var(--md-default-fg-color--lighter)
+}
+
+.md-typeset .mdx-iconsearch-result::-webkit-scrollbar-thumb:hover {
+    background-color: var(--md-accent-fg-color)
+}
+
+.md-typeset .mdx-iconsearch-result__meta {
+    color: var(--md-default-fg-color--lighter);
+    font-size: .64rem;
+    position: absolute;
+    right: .6rem;
+    top: .4rem
+}
+
+@media screen and (max-width:29.984375em) {
+    .md-typeset .mdx-iconsearch-result__meta {
+        display: none
+    }
+}
+
+.md-typeset .mdx-iconsearch-result__select {
+    background-color: var(--md-default-fg-color--lightest);
+    border: none;
+    border-radius: .1rem;
+    color: var(--md-default-fg-color--light);
+    font-size: .64rem;
+    padding-bottom: .15em;
+    padding-top: .15em;
+    position: absolute;
+    right: .6rem;
+    top: .4rem;
+    transition: color 125ms, background-color 125ms
+}
+
+.md-typeset .mdx-iconsearch-result__select:focus,
+.md-typeset .mdx-iconsearch-result__select:hover {
+    background-color: var(--md-accent-fg-color);
+    color: var(--md-accent-bg-color);
+    outline: none
+}
+
+.md-typeset .mdx-iconsearch-result__select+.mdx-iconsearch-result__meta {
+    right: 4.1rem
+}
+
+[dir=ltr] .md-typeset .mdx-iconsearch-result__list {
+    margin-left: 0
+}
+
+[dir=rtl] .md-typeset .mdx-iconsearch-result__list {
+    margin-right: 0
+}
+
+.md-typeset .mdx-iconsearch-result__list {
+    list-style: none;
+    margin: 0;
+    padding: 0
+}
+
+[dir=ltr] .md-typeset .mdx-iconsearch-result__item {
+    margin-left: 0
+}
+
+[dir=rtl] .md-typeset .mdx-iconsearch-result__item {
+    margin-right: 0
+}
+
+.md-typeset .mdx-iconsearch-result__item {
+    border-bottom: .05rem solid var(--md-default-fg-color--lightest);
+    margin: 0;
+    padding: .2rem .6rem
+}
+
+.md-typeset .mdx-iconsearch-result__item:last-child {
+    border-bottom: none
+}
+
+.md-typeset .mdx-iconsearch-result__item>* {
+    margin-right: .6rem
+}
+
+.md-typeset .mdx-iconsearch-result__item img {
+    height: .9rem;
+    width: .9rem
+}
+
+[data-md-color-scheme=slate] .md-typeset .mdx-iconsearch-result__item img[src*=squidfunk] {
+    filter: invert(1)
+}
+
+.md-typeset .mdx-premium p {
+    margin: 2em 0;
+    text-align: center
+}
+
+.md-typeset .mdx-premium img {
+    height: 3.25rem
+}
+
+.md-typeset .mdx-premium p:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center
+}
+
+.md-typeset .mdx-premium p:last-child>a {
+    display: block;
+    flex-shrink: 0
+}
+
+.md-typeset .mdx-sponsorship__list {
+    margin: 2em 0
+}
+
+.md-typeset .mdx-sponsorship__list:after {
+    clear: both;
+    content: "";
+    display: block
+}
+
+[dir=ltr] .md-typeset .mdx-sponsorship__item {
+    float: left
+}
+
+[dir=rtl] .md-typeset .mdx-sponsorship__item {
+    float: right
+}
+
+.md-typeset .mdx-sponsorship__item {
+    border-radius: 100%;
+    display: block;
+    height: 1.6rem;
+    margin: .2rem;
+    overflow: hidden;
+    transform: scale(1);
+    transition: color 125ms, transform 125ms;
+    width: 1.6rem
+}
+
+.md-typeset .mdx-sponsorship__item:focus,
+.md-typeset .mdx-sponsorship__item:hover {
+    transform: scale(1.1)
+}
+
+.md-typeset .mdx-sponsorship__item:focus img,
+.md-typeset .mdx-sponsorship__item:hover img {
+    filter: grayscale(0)
+}
+
+.md-typeset .mdx-sponsorship__item--private {
+    background: var(--md-default-fg-color--lightest);
+    color: var(--md-default-fg-color--lighter);
+    font-size: .6rem;
+    font-weight: 700;
+    line-height: 1.6rem;
+    text-align: center
+}
+
+.md-typeset .mdx-sponsorship__item img {
+    display: block;
+    filter: grayscale(100%) opacity(75%);
+    height: auto;
+    transition: filter 125ms;
+    width: 100%
+}
+
+.md-typeset .mdx-sponsorship-button {
+    font-weight: 400
+}
+
+.md-typeset .mdx-sponsorship-count,
+.md-typeset .mdx-sponsorship-total {
+    font-weight: 700
+}
+
+ /*==============================================================================
+  BAOBAB ENTERPRISE PLATFORM
+  Material for MkDocs Theme
+
+  File:
+      docs/assets/stylesheets/extra.css
+
+  Purpose:
+      Entry point for the Baobab Documentation Design System.
+
+      This file intentionally contains little or no styling.
+      Instead, it imports the modular CSS architecture that defines
+      the Baobab visual identity.
+
+  Architecture:
+
+      palette.css        → Design tokens
+      typography.css     → Fonts and text styles
+      layout.css         → Page layout and grids
+      components.css     → Reusable UI components
+      utilities.css      → Utility helper classes
+      dark.css           → Dark mode overrides
+      animations.css     → Animations and transitions
+
+      Everything below the import block is landing-page-only CSS
+      (docs/index.md). It is intentionally NOT a separate landing.css
+      file — folding it into extra.css avoids a second extra_css entry
+      in mkdocs.yml. Nothing in this section should be treated as a
+      shared design-system primitive; if a rule here is ever needed
+      on a non-landing page, promote it into one of the imported files
+      above instead of reaching for a class defined below.
+
+  Author:
+      Nabhold Group Africa
+
+  Project:
+      Baobab Enterprise Platform
+==============================================================================*/
+
+
+/*
+  Design Tokens
+==============================================================================*/
+
+@import url("palette.css");
+
+
+/*
+  Typography
+==============================================================================*/
+@import url("typography-tokens.css");
+@import url("typography.css");
+
+
+/*
+  Layout
+==============================================================================*/
+
+@import url("layout.css");
+
+
+/*
+  Components
+==============================================================================*/
+
+@import url("components.css");
+
+
+/*
+  Utilities
+==============================================================================*/
+
+@import url("utilities.css");
+
+
+/*
+  Dark Theme
+==============================================================================*/
+
+@import url("dark.css");
+
+
+/*
+  Animations
+==============================================================================*/
+
+@import url("animations.css");
+@import url("custom.css");
+
+
+/*==============================================================================
+  LANDING PAGE — docs/index.md only
+  Everything below this banner is scoped to the marketing/landing page.
+  Do not reference these classes from documentation content pages.
+==============================================================================*/
+
+
+/*
+  Landing Hero
+  ------------------------------------------------------------------------
+  Namespaced as .landing-hero (NOT .hero) so it never collides with the
+  shared, mobile-first .hero rule defined in layout.css. That shared rule
+  is left completely untouched and remains available for any future
+  in-docs mini-hero use.
+
+  Lives in overrides/partials/hero.html, rendered via Material's `hero`
+  block — OUTSIDE `.md-content`. Two consequences that don't apply to any
+  other class in this file:
+
+    1. .landing-hero-bleed exists purely to give the hero its own
+       full-width background, independent of `--baobab-container-max`.
+       .landing-hero itself still constrains its CONTENT to that same
+       max-width, centered inside the full-bleed band — the standard
+       "full-bleed section, contained content" pattern.
+
+    2. .landing-hero now needs its own explicit horizontal padding.
+       Previously it sat inside `.md-content`, which supplies horizontal
+       padding on every ordinary page. Outside `.md-content`, nothing
+       does that automatically, so it's declared here instead.
+==============================================================================*/
+
+.landing-hero-bleed {
+
+    position: relative;
+    overflow: hidden;
+    background: var(--baobab-background);
+
+}
+
+[data-md-color-scheme="slate"] .landing-hero-bleed {
+
+    background: var(--baobab-background-dark);
+
+}
+
+.landing-hero-bleed .hero-bg {
+
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: right center;
+    pointer-events: none;
+    z-index: 0;
+    display: none;
+
+}
+
+@media (min-width: 1024px) {
+
+    .landing-hero-bleed .hero-bg {
+
+        display: block;
+
+    }
+
+}
+
+.landing-hero-bleed::before {
+
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+
+    background: linear-gradient(
+        90deg,
+        var(--baobab-background) 0%,
+        var(--baobab-background) 46%,
+        transparent 82%
+    );
+
+}
+
+[data-md-color-scheme="slate"] .landing-hero-bleed::before {
+
+    background: linear-gradient(
+        90deg,
+        var(--baobab-background-dark) 0%,
+        var(--baobab-background-dark) 46%,
+        transparent 82%
+    );
+
+}
+
+.landing-hero {
+
+    position: relative;
+    z-index: 2;
+    max-width: var(--baobab-container-max);
+    margin-inline: auto;
+    padding-block: var(--baobab-space-12);
+    padding-inline: var(--baobab-container-padding);
+
+}
+
+.hero-content {
+
+    max-width: 40rem;
+
+}
+
+@media (min-width: 1024px) {
+
+    .hero-content {
+
+        max-width: min(66vw, 42rem);
+
+    }
+
+}
+
+.hero-kicker {
+
+    display: block;
+    text-transform: uppercase;
+    letter-spacing: var(--baobab-tracking-wide);
+    font-size: var(--baobab-text-sm);
+    font-weight: var(--baobab-weight-semibold);
+    color: var(--baobab-green);
+    margin: 0 0 var(--baobab-space-3);
+
+}
+
+[data-md-color-scheme="slate"] .hero-kicker {
+
+    color: var(--baobab-green-light);
+
+}
+
+.landing-hero h1 {
+
+    font-size: var(--baobab-text-5xl);
+    line-height: var(--baobab-leading-tight);
+    letter-spacing: var(--baobab-tracking-tight);
+    margin: 0 0 var(--baobab-space-4);
+
+}
+
+@media (max-width: 480px) {
+
+    .landing-hero h1 {
+
+        font-size: var(--baobab-text-3xl);
+
+    }
+
+}
+
+.hero-lead {
+
+    font-size: var(--baobab-text-lg);
+    line-height: var(--baobab-leading-snug);
+    color: var(--md-default-fg-color--light);
+    margin: 0 0 var(--baobab-space-6);
+
+}
+
+.hero-actions {
+
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--baobab-space-3);
+
+}
+
+
+/*
+  Technology Strip
+==============================================================================*/
+
+.tech-strip {
+
+    display: grid;
+
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+
+    gap: 1rem;
+
+    text-align: center;
+
+    margin-block: var(--baobab-space-10);
+
+}
+
+.tech-item {
+
+    padding: 1rem;
+
+    border: 1px solid var(--baobab-border);
+
+    border-radius: var(--baobab-radius-small);
+
+    background: var(--baobab-surface);
+
+}
+
+[data-md-color-scheme="slate"] .tech-item {
+
+    background: var(--baobab-surface-dark);
+
+    border-color: var(--baobab-border-dark);
+
+}
+
+
+
+/*
+  Capability Icons
+==============================================================================*/
+
+.icon-grid {
+
+    display: grid;
+
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+
+    gap: var(--baobab-space-5);
+
+}
+
+.icon-card {
+
+    text-align: center;
+
+    padding: 2rem 1rem;
+
+}
+
+.icon-card .twemoji {
+
+    font-size: 2rem;
+
+    margin-bottom: 1rem;
+
+}
+
+
+
+/*
+  Metrics
+==============================================================================*/
+
+.metrics {
+
+    display: grid;
+
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+
+    gap: var(--baobab-space-4);
+
+}
+
+.metric {
+
+    text-align: center;
+
+    padding: 1.5rem;
+
+}
+
+.metric strong {
+
+    display: block;
+
+    font-size: 1.8rem;
+
+}
+
+
+
+/*
+  Documentation Cards
+==============================================================================*/
+
+.documentation-grid {
+
+    display: grid;
+
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+
+    gap: var(--baobab-space-5);
+
+}
+
+.documentation-card {
+
+    display: flex;
+
+    flex-direction: column;
+
+    justify-content: space-between;
+
+    min-height: 220px;
+
+    padding: 1.5rem;
+
+    border: 1px solid var(--baobab-border);
+
+    border-radius: var(--baobab-radius-small);
+
+    background: var(--baobab-surface);
+
+}
+
+[data-md-color-scheme="slate"] .documentation-card {
+
+    background: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+
+}
+
+
+
+/*
+  CTA Banner
+==============================================================================*/
+
+.cta-banner {
+
+    margin-block: var(--baobab-space-12);
+
+    padding: 4rem 3rem;
+
+    border-radius: var(--baobab-radius);
+
+    background:
+        linear-gradient(135deg,
+            var(--baobab-primary),
+            var(--baobab-background-dark));
+
+    color: white;
+
+    text-align: center;
+
+}
+
+.cta-banner .md-button {
+
+    margin-top: 1.5rem;
+
+}
+
+
+
+/*
+  Footer Navigation
+  ------------------------------------------------------------------------
+  .footer-grid itself (the six-column sitemap layout) is unchanged from
+  its original definition. .md-footer-directory is new: it's the
+  full-width background band around it, now rendered site-wide via
+  overrides/partials/footer.html rather than only on the landing page.
+==============================================================================*/
+
+.md-footer-directory {
+
+    background: var(--baobab-surface);
+
+    padding-block: var(--baobab-space-8);
+
+}
+
+[data-md-color-scheme="slate"] .md-footer-directory {
+
+    background: var(--baobab-surface-dark);
+
+}
+
+.footer-grid {
+
+    display: grid;
+
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+
+    gap: var(--baobab-space-6);
+
+    margin-top: var(--baobab-space-10);
+
+}
+
+.footer-grid h3 {
+
+    margin-bottom: 0.75rem;
+
+}
+
+.footer-grid ul {
+
+    list-style: none;
+
+    margin: 0;
+
+    padding: 0;
+
+}
+
+.footer-grid li {
+
+    margin-bottom: 0.5rem;
+    font-size: medium
+}
+
+
+
+/*
+  Responsive Landing Hero
+==============================================================================*/
+
+@media (max-width: 1023px) {
+
+    .landing-hero {
+
+        text-align: center;
+
+    }
+
+    .hero-content {
+
+        margin-inline: auto;
+
+    }
+
+    .hero-actions {
+
+        justify-content: center;
+
+    }
+
+}
+
+
+/*==============================================================================
+  Feature Grid
+==============================================================================*/
+
+.feature-grid {
+
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: var(--baobab-space-6);
+    margin-block: var(--baobab-space-8);
+
+}
+
+
+/*==============================================================================
+  Feature Card
+==============================================================================*/
+
+.feature-card {
+
+    position: relative;
+
+    display: flex;
+    flex-direction: column;
+
+    gap: var(--baobab-space-4);
+
+    padding: 2rem;
+
+    border: 1px solid var(--baobab-border);
+
+    border-radius: var(--baobab-radius);
+
+    background: var(--baobab-surface);
+
+    transition:
+        transform 220ms ease,
+        border-color 220ms ease,
+        box-shadow 220ms ease;
+
+}
+
+[data-md-color-scheme="slate"] .feature-card {
+
+    background: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+
+}
+
+.feature-card:hover {
+
+    transform: translateY(-6px);
+
+    border-color: var(--md-primary-fg-color);
+
+    box-shadow: var(--baobab-shadow-large);
+
+}
+
+[data-md-color-scheme="slate"] .feature-card:hover {
+
+    box-shadow: var(--baobab-shadow-large-dark);
+
+}
+
+
+/*==============================================================================
+  Feature Icon
+==============================================================================*/
+
+.feature-icon {
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: color-mix(in srgb,
+            var(--md-primary-fg-color) 12%,
+            transparent);
+    font-size: 1.6rem;
+    color: var(--md-primary-fg-color);
+
+}
+
+
+/*==============================================================================
+  Feature Heading
+==============================================================================*/
+
+.feature-card h3 {
+
+    margin: 0;
+
+}
+
+.feature-card p {
+
+    margin: 0;
+    color: var(--md-default-fg-color--light);
+
+}
+
+
+/*==============================================================================
+  Feature List
+==============================================================================*/
+
+.feature-list {
+
+    margin: auto 0 0;
+    padding: 0;
+    min-height: 24rem;
+    list-style: none;
+
+}
+
+.feature-list li {
+
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding-block: .45rem;
+
+}
+
+.feature-list li::before {
+
+    content: "✓";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    background: var(--md-primary-fg-color);
+    color: white;
+    font-size: .75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+
+}
+
+
+/*==============================================================================
+  Responsive
+==============================================================================*/
+
+@media (max-width: 768px) {
+
+    .feature-grid {
+
+        grid-template-columns: 1fr;
+
+    }
+
+}
+
+/*==============================================================================
+  Showcase Proof Panel
+==============================================================================*/
+
+.showcase-panel {
+
+    position: relative;
+
+    border: 1px solid var(--baobab-border);
+
+    border-radius: var(--baobab-radius);
+
+    background: var(--baobab-surface);
+
+    overflow: hidden;
+
+    transition:
+        transform 220ms ease,
+        border-color 220ms ease,
+        box-shadow 220ms ease;
+
+}
+
+[data-md-color-scheme="slate"] .showcase-panel {
+
+    background: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+
+}
+
+.showcase-panel:hover {
+
+    transform: translateY(-4px);
+
+    border-color: var(--md-primary-fg-color);
+
+    box-shadow: var(--baobab-shadow-large);
+
+}
+
+[data-md-color-scheme="slate"] .showcase-panel:hover {
+
+    box-shadow: var(--baobab-shadow-large-dark);
+
+}
+
+
+/*==============================================================================
+  Panel Header
+==============================================================================*/
+
+.showcase-panel-header {
+
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+
+    padding: .85rem 1rem;
+
+    border-bottom: 1px solid var(--baobab-border);
+
+    background:
+        linear-gradient(180deg,
+            rgba(255, 255, 255, .03),
+            rgba(0, 0, 0, .04));
+
+    font-size: .85rem;
+    font-weight: 600;
+
+}
+
+[data-md-color-scheme="slate"] .showcase-panel-header {
+
+    border-color: var(--baobab-border-dark);
+
+}
+
+.showcase-panel-header .window-dot {
+
+    width: 12px;
+    height: 12px;
+
+    border-radius: 50%;
+
+}
+
+.showcase-panel-header .red {
+
+    background: #ef4444;
+
+}
+
+.showcase-panel-header .yellow {
+
+    background: #f59e0b;
+
+}
+
+.showcase-panel-header .green {
+
+    background: #22c55e;
+
+}
+
+.showcase-panel-title {
+
+    margin-left: .5rem;
+
+    color: var(--md-default-fg-color--light);
+
+}
+
+
+/*==============================================================================
+  Mermaid
+==============================================================================*/
+
+.showcase-panel .mermaid {
+
+    padding: 1.5rem;
+
+    background: transparent;
+
+}
+
+
+/*==============================================================================
+  Code Blocks
+==============================================================================*/
+
+.showcase-panel pre {
+
+    margin: 0;
+
+    border-radius: 0;
+
+    background: transparent;
+
+}
+
+
+/*==============================================================================
+  Responsive
+==============================================================================*/
+
+@media (max-width: 992px) {
+
+    .showcase-panel {
+
+        margin-top: 1rem;
+
+    }
+
+}
+
+
+/*==============================================================================
+  Project Status
+  ------------------------------------------------------------------------
+  Deliberately distinct from every other card treatment on the page —
+  horizontal icon-left/text-right layout with a thin colored top accent,
+  rather than the centered tile (.tech-item), circular-icon vertical card
+  (.feature-card), or icon+description+button card (.documentation-card)
+  used elsewhere. This section reads as a trust/status strip late in the
+  page narrative, immediately before the CTA banner.
+==============================================================================*/
+
+.status-grid {
+
+    display: grid;
+
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+
+    gap: var(--baobab-space-5);
+
+    margin-block: var(--baobab-space-8);
+
+}
+
+.status-card {
+
+    display: flex;
+
+    align-items: flex-start;
+
+    gap: var(--baobab-space-4);
+
+    padding: var(--baobab-space-5);
+
+    border: 1px solid var(--baobab-border);
+    border-top: 3px solid var(--baobab-green);
+
+    border-radius: var(--baobab-radius-small);
+
+    background: var(--baobab-surface);
+
+    transition:
+        transform 220ms ease,
+        box-shadow 220ms ease;
+
+}
+
+[data-md-color-scheme="slate"] .status-card {
+
+    background: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+    border-top-color: var(--baobab-green-light);
+
+}
+
+.status-card:hover {
+
+    transform: translateY(-3px);
+
+    box-shadow: var(--baobab-shadow-small);
+
+}
+
+[data-md-color-scheme="slate"] .status-card:hover {
+
+    box-shadow: var(--baobab-shadow-small-dark);
+
+}
+
+.status-card .twemoji {
+
+    flex-shrink: 0;
+
+    font-size: 1.75rem;
+
+    color: var(--baobab-green);
+
+}
+
+[data-md-color-scheme="slate"] .status-card .twemoji {
+
+    color: var(--baobab-green-light);
+
+}
+
+.status-card h3 {
+
+    margin: 0 0 .35rem;
+
+    font-size: var(--baobab-text-lg);
+
+}
+
+.status-card p {
+
+    margin: 0;
+
+    font-size: var(--baobab-text-sm);
+
+    color: var(--md-default-fg-color--light);
+
+}
+
+/*==============================================================================
+  Shared documentation cards for section landing pages
+==============================================================================*/
+
+.doc-intro {
+    display: grid;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+    margin-block: 1.5rem;
+    border: 1px solid var(--baobab-border);
+    border-radius: var(--baobab-radius);
+    background: linear-gradient(135deg, var(--baobab-surface), var(--md-default-bg-color));
+}
+
+[data-md-color-scheme="slate"] .doc-intro {
+    border-color: var(--baobab-border-dark);
+    background: linear-gradient(135deg, var(--baobab-surface-dark), var(--md-default-bg-color));
+}
+
+.doc-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin-block: 1.5rem;
+}
+
+.doc-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.2rem 1.25rem;
+    border: 1px solid var(--baobab-border);
+    border-radius: var(--baobab-radius-small);
+    background: var(--baobab-surface);
+    box-shadow: var(--baobab-shadow-small);
+}
+
+[data-md-color-scheme="slate"] .doc-card {
+    background: var(--baobab-surface-dark);
+    border-color: var(--baobab-border-dark);
+}
+
+.doc-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--md-primary-fg-color) 16%, transparent);
+    color: var(--md-primary-fg-color);
+    font-size: 1.3rem;
+}
+
+.doc-card h3 {
+    margin: 0;
+}
+
+.doc-card p {
+    margin: 0;
+    color: var(--md-default-fg-color--light);
+}
+
+.doc-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: fit-content;
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--md-primary-fg-color) 12%, transparent);
+    color: var(--md-primary-fg-color);
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+@media (max-width: 768px) {
+    .doc-grid {
+        grid-template-columns: 1fr;
+    }
+}
+

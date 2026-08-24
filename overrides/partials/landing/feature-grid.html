@@ -1,0 +1,67 @@
+{#
+overrides/partials/landing/feature-grid.html
+
+Icons switched from Material to verified Lucide filenames (confirmed
+present in the installed zensical package's .icons/lucide directory
+before use, not guessed) per feedback on iconography.
+#}
+
+<section class="md-grid md-typeset">
+  <h2>Why BAOBAB</h2>
+
+  <div class="feature-grid">
+
+    <div class="feature-card">
+      <div class="feature-icon">
+        <span class="twemoji">{% include ".icons/lucide/git-branch.svg" %}</span>
+      </div>
+      <h3>Deterministic builds</h3>
+      <p>
+        <code>config/versions.yaml</code> is the single source of truth
+        for every tool version, resolved to a lock file before Docker
+        ever runs. Identical inputs produce identical images — no
+        drift between what one engineer has and what another does.
+      </p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">
+        <span class="twemoji">{% include ".icons/lucide/layers.svg" %}</span>
+      </div>
+      <h3>Multi-arch by default</h3>
+      <p>
+        Every published image supports <strong>linux/amd64</strong>
+        and <strong>linux/arm64</strong> via Docker Buildx, built from
+        the same Dockerfile — Apple Silicon and ARM64 cloud runners get
+        a native image, not an emulated one.
+      </p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">
+        <span class="twemoji">{% include ".icons/lucide/refresh-cw.svg" %}</span>
+      </div>
+      <h3>Identical everywhere</h3>
+      <p>
+        Local Docker, VS&nbsp;Code Dev Containers, GitHub Codespaces,
+        and CI all run the same image — onboarding a new engineer and
+        reproducing a CI failure locally use the exact same
+        environment.
+      </p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">
+        <span class="twemoji">{% include ".icons/lucide/badge-check.svg" %}</span>
+      </div>
+      <h3>Verified before it ships</h3>
+      <p>
+        Every image is validated by an automated build-time
+        verification pass — toolchain, runtime configuration, and user
+        permissions are checked before publication, not after
+        engineers hit a broken environment.
+      </p>
+    </div>
+
+  </div>
+</section>

@@ -1,0 +1,55 @@
+{#
+overrides/partials/landing/trust-grid.html
+
+Icons switched to verified filenames, deliberately mixing icon sets
+(Lucide + Octicons) rather than using one set for everything, per
+feedback requesting Lucide/FontAwesome/Octicons/Simple Icons in
+place of Material.
+#}
+
+<section class="md-grid md-typeset">
+  <h2>Supply-chain integrity, not an afterthought</h2>
+  <p>
+    Every published image is signed, attested, and scanned before it
+    reaches a registry — verifiable by anyone, not just trusted by
+    default.
+  </p>
+
+  <div class="status-grid">
+
+    <div class="status-card">
+      <span class="twemoji">{% include ".icons/lucide/key-round.svg" %}</span>
+      <div>
+        <h3>Keyless signing</h3>
+        <p>Every image is signed via Cosign using GitHub OIDC — no long-lived signing keys to leak or rotate.</p>
+      </div>
+    </div>
+
+    <div class="status-card">
+      <span class="twemoji">{% include ".icons/octicons/verified-24.svg" %}</span>
+      <div>
+        <h3>SLSA provenance</h3>
+        <p>Build provenance is attested and published alongside every image, tracing it back to the exact workflow run
+          that built it.</p>
+      </div>
+    </div>
+
+    <div class="status-card">
+      <span class="twemoji">{% include ".icons/lucide/file-check.svg" %}</span>
+      <div>
+        <h3>SPDX SBOM</h3>
+        <p>A full software bill of materials is generated and attested for every image, so you know exactly what's
+          inside.</p>
+      </div>
+    </div>
+
+    <div class="status-card">
+      <span class="twemoji">{% include ".icons/lucide/scan-search.svg" %}</span>
+      <div>
+        <h3>Trivy CVE gating</h3>
+        <p>Images are scanned for known vulnerabilities before publication, with severity gating enforced in CI.</p>
+      </div>
+    </div>
+
+  </div>
+</section>

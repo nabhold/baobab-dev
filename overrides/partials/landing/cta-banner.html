@@ -1,0 +1,24 @@
+{#
+overrides/partials/landing/cta-banner.html
+
+Reuses .cta-banner (extra.css) as-is. Its gradient
+(--baobab-primary → --baobab-background-dark) is dark enough that
+the default .md-button--primary (green bg, white text) already has
+sufficient contrast here with no extra CSS — verified against the
+gradient's own two stops in extra.css, not assumed.
+#}
+
+<section class="md-grid md-typeset">
+  <div class="cta-banner">
+    <h2>Bring your whole team to one environment</h2>
+    <p>
+      Stop debugging "works on my machine." Start every engineer,
+      every Codespace, and every CI run from the same signed, verified
+      image.
+    </p>
+    <a href="{{ page.next_page.url | url }}" title="{{ page.next_page.title | e }}"
+      class="md-button md-button--primary">
+      Get started
+    </a>
+  </div>
+</section>

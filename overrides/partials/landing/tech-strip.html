@@ -1,0 +1,51 @@
+{#
+overrides/partials/landing/tech-strip.html
+
+REVISED per feedback:
+- Grid fixed to explicit 4 columns at desktop (was auto-fit, which
+packed 7-8 narrow items into one row instead of wrapping).
+- Django/DRF/FastAPI/Next.js/Celery/MinIO added, confirmed by
+Wekhaso as belonging to the sibling nabhold/baobab platform repo
+that will also reuse this partial.
+- Split into two labeled groups rather than one undifferentiated
+list: config/versions.yaml only pins the first group, so those
+items keep real version numbers; the second group is named
+without invented version numbers, since no manifest for that
+repo was available to verify against (per project's own
+"never fabricate" standard -- flag if exact versions should be
+added here instead).
+- Icons switched from Material to real, disk-verified filenames
+from Zensical's bundled Simple Icons / Lucide sets (see
+icons-emojis.md's "Use icons in templates" pattern) rather than
+re-using Material for everything.
+#}
+
+<section class="md-grid md-typeset">
+  <h2 class="sr-only">Built on a pinned, reproducible toolchain</h2>
+
+  <span class="tech-strip-label">Development environment (pinned in config/versions.yaml)</span>
+  <div class="tech-strip">
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/ubuntu.svg" %}</span> Ubuntu 26.04 LTS</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/python.svg" %}</span> Python 3.14</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/nodedotjs.svg" %}</span> Node.js 24</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/flutter.svg" %}</span> Flutter (stable)</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/postgresql.svg" %}</span> PostgreSQL 17</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/docker.svg" %}</span> Docker Buildx</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/lucide/layers.svg" %}</span> amd64 &middot; arm64
+    </div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/lucide/key-round.svg" %}</span> Cosign (keyless)
+    </div>
+  </div>
+
+  <span class="tech-strip-label" style="margin-top: var(--baobab-space-8)">Built for the BAOBAB Enterprise Platform
+    stack</span>
+  <div class="tech-strip">
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/django.svg" %}</span> Django</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/lucide/network.svg" %}</span> Django REST Framework
+    </div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/fastapi.svg" %}</span> FastAPI</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/nextdotjs.svg" %}</span> Next.js</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/celery.svg" %}</span> Celery</div>
+    <div class="tech-item"><span class="twemoji">{% include ".icons/simple/minio.svg" %}</span> MinIO</div>
+  </div>
+</section>

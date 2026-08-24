@@ -1,0 +1,87 @@
+/* PREVIEW-ONLY SHIM — approximates the subset of Material for MkDocs'
+   own core CSS (md-grid, md-typeset, base .md-button) needed to render
+   this preview, since Material's compiled theme CSS ships via the
+   mkdocs-material/zensical Python package and isn't part of this
+   repo's own files. The real site will use the actual theme CSS —
+   this file exists only so the proposal below is visually honest
+   rather than unstyled. Do not add this file to the real project. */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--baobab-font-sans);
+  color: var(--baobab-text);
+  background: var(--baobab-background);
+}
+
+[data-md-color-scheme="slate"] body {
+  color: var(--baobab-text-dark);
+  background: var(--baobab-background-dark);
+}
+
+.md-grid {
+  max-width: 61rem;
+  margin-inline: auto;
+}
+
+.md-typeset {
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.md-typeset h1 { font-weight: 700; }
+.md-typeset h2 { font-size: 1.8rem; margin-top: 0; }
+.md-typeset h3 { font-size: 1.1rem; }
+.md-typeset p { margin: 0.5em 0; }
+
+.md-typeset .twemoji svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  vertical-align: -0.15em;
+}
+
+.md-typeset .md-button {
+  display: inline-block;
+  border: 0.1rem solid var(--baobab-primary);
+  color: var(--baobab-primary);
+  text-decoration: none;
+  font-size: .8rem;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .md-button {
+  border-color: var(--baobab-text-dark);
+  color: var(--baobab-text-dark);
+}
+
+.md-typeset .documentation-card a {
+  color: var(--baobab-green);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: var(--baobab-text-sm);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .documentation-card a {
+  color: var(--baobab-green-light);
+}
+
+.md-typeset .cta-banner h2,
+.md-typeset .cta-banner p {
+  color: white;
+}
+
+/* preview toggle button, not part of the real site */
+.preview-toggle {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 999;
+  padding: .5rem 1rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--baobab-primary);
+  color: white;
+  font-family: var(--baobab-font-sans);
+  cursor: pointer;
+}

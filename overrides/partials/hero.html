@@ -1,57 +1,144 @@
-<!-- Additional styles for landing page -->
+{#
+overrides/partials/hero.html
+
+REVAMPED — previously a byte-for-byte copy of Material for MkDocs'
+own stock homepage template (.mdx-hero markup, "Technical
+documentation that just works" headline, generic stock illustration).
+See baobab-dev-project-report / chat history for the full audit.
+
+This file now:
+
+1. Uses .landing-hero / .hero-content / .hero-actions — classes
+that already existed, fully styled and dark-mode aware, in
+extra.css, and were already wired up in extra.js's
+initialiseHero() (targets ".landing-hero .hero-content") and
+initialiseRevealAnimations() (targets .feature-card, .tech-item,
+.documentation-card, .status-card, .showcase-panel below).
+Switching away from .mdx-hero also fixes, as a side effect, the
+purple button/background bug: custom.css's legacy
+.mdx-hero .md-button--primary rule (#894da8) was overriding
+components.css's correct --baobab-green button styling. That
+legacy .mdx-* block in custom.css is now fully dead code
+(confirmed via repo-wide grep — used nowhere else) and is safe
+to delete in a follow-up cleanup pass.
+
+2. Hosts the ENTIRE custom landing page, not just the hero band —
+per your call to keep .md-content hidden and build this as a
+fully custom single-page template rather than un-hiding
+.md-content and authoring in docs/index.md. Each section below
+the hero is its own partial under partials/landing/, included
+here, so this file stays a table of contents rather than a
+400+ line monolith.
+
+3. Uses config.repo_url as the secondary CTA target (Material/
+Zensical standard variable, same source as the repo link in the
+header) — serves the "public/external evaluator" half of the
+dual audience directly from the fold, alongside the "Quick
+Start" CTA for the "internal engineer" half.
+
+Open item (flagged, not resolved here): the tech-strip partial below
+is intentionally scoped to ONLY what config/versions.yaml actually
+pins (Ubuntu, Python, Node, Flutter, PostgreSQL, Docker, Cosign,
+GitHub CLI). Django/DRF/FastAPI/Next.js/Celery/MinIO do not appear
+anywhere in the repo (Dockerfile, versions.yaml, pyproject.toml) —
+see chat for the discrepancy against prior context. Do not add them
+to marketing copy until confirmed; a placeholder note marks where
+they'd go if intentional.
+#}
+
+<!-- Application chrome adjustments for the landing page -->
 <style>
-  /* Application header should be static for the landing page */
-  .md-header {
-    position: initial;
-  }
-
-  /* Remove spacing, as we cannot hide it completely */
-  .md-main__inner {
-    margin: 0;
-  }
-
-  /* Hide main content for now */
-  .md-content {
-    display: none;
-  }
-
-  /* Hide table of contents */
-  @media screen and (min-width: 60em) {
-    .md-sidebar--secondary {
-      display: none;
+    /* Application header should be static for the landing page */
+    .md-header {
+        position: initial;
     }
-  }
 
-  /* Hide navigation */
-  @media screen and (min-width: 76.25em) {
-    .md-sidebar--primary {
-      display: none;
+    /* Remove spacing, as we cannot hide it completely */
+    .md-main__inner {
+        margin: 0;
     }
-  }
+
+    /* Hide main content — this template renders the full landing page
+     itself; docs/index.md's own content block stays empty. */
+    .md-content {
+        display: none;
+    }
+
+    /* Hide table of contents */
+    @media screen and (min-width: 60em) {
+        .md-sidebar--secondary {
+            display: none;
+        }
+    }
+
+    /* Hide navigation */
+    @media screen and (min-width: 76.25em) {
+        .md-sidebar--primary {
+            display: none;
+        }
+    }
 </style>
 
-<!-- Hero for landing page -->
-<section class="mdx-container">
-  <div class="md-grid md-typeset">
-    <div class="mdx-hero">
+<!-- ==========================================================================
+     HERO
+     Full-bleed band (.landing-hero-bleed) so the illustration can run
+     edge to edge; content stays constrained to --baobab-container-max
+     via .landing-hero, same "full-bleed section, contained content"
+     pattern used by .md-footer-directory in footer.html.
+========================================================================== -->
+<section class="landing-hero-bleed">
 
-      <!-- Hero image -->
-      <div class="mdx-hero__image">
-        <img src="assets/images/illustration.svg" alt="" width="1659" height="1200" draggable="false">
-      </div>
+    <!-- Background illustration: full-bleed, animated internally (see
+       the SVG's own embedded <style>/@keyframes — required because an
+       img-referenced SVG can't be reached by this page's CSS). Purely
+       decorative: empty alt, aria-hidden inside the SVG, and no
+       information is conveyed here that isn't also in the text. -->
+    <img class="hero-bg" src="{{ 'assets/images/illustration-baobab.svg' | url }}" alt="" width="1600" height="1000"
+        draggable="false">
 
-      <!-- Hero content -->
-      <div class="mdx-hero__content">
-        <h1>Technical documentation that just works</h1>
-        <p>{{ config.site_description }}. Set up in 5 minutes.</p>
-        <a href="{{ page.next_page.url | url }}" title="{{ page.next_page.title | e }}"
-          class="md-button md-button--primary">
-          Quick start
-        </a>
-        <a href="{{ 'insiders/' | url }}" title="Material for MkDocs Insiders" class="md-button">
-          Get Insiders
-        </a>
-      </div>
+    <div class="md-grid md-typeset">
+        <div class="landing-hero">
+            <div class="hero-content">
+
+                <p class="hero-kicker">Enterprise-Grade Development Infrastructure</p>
+
+                <h1>The same environment. Every machine. Every time.</h1>
+
+                <p class="hero-lead">
+                    {{ config.site_description }} Deterministic, multi-architecture,
+                    and continuously verified — from your laptop to GitHub
+                    Codespaces to CI.
+                </p>
+
+                <div class="hero-actions">
+                    <a href="{{ page.next_page.url | url }}" title="{{ page.next_page.title | e }}"
+                        class="md-button md-button--primary">
+                        Quick Start
+                    </a>
+                    <a href="{{ config.repo_url }}" title="View source on GitHub" class="md-button">
+                        View on GitHub
+                    </a>
+                </div>
+
+            </div>
+        </div>
     </div>
-  </div>
 </section>
+
+<!-- ==========================================================================
+     BELOW THE FOLD
+     Each partial below consumes classes that already existed in
+     extra.css (tech-strip/tech-item, feature-grid/feature-card,
+     status-grid/status-card, documentation-grid/documentation-card,
+     cta-banner) and were already targeted by extra.js's
+     initialiseRevealAnimations() — this is the first time any markup
+     has actually matched those selectors, so the existing
+     scroll-triggered fade-in now activates with no JS/CSS changes
+     needed for that mechanism.
+========================================================================== -->
+
+{% include "partials/landing/tech-strip.html" %}
+{% include "partials/landing/feature-grid.html" %}
+{% include "partials/landing/trust-grid.html" %}
+{% include "partials/landing/documentation-grid.html" %}
+{% include "partials/landing/cta-banner.html" %}

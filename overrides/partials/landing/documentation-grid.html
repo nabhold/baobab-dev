@@ -1,0 +1,67 @@
+{#
+overrides/partials/landing/documentation-grid.html
+
+Icons switched from Material to verified Lucide filenames.
+#}
+
+<section class="md-grid md-typeset">
+  <h2>Explore the documentation</h2>
+
+  <div class="documentation-grid">
+
+    <div class="documentation-card">
+      <div>
+        <span class="twemoji">{% include ".icons/lucide/book-open.svg" %}</span>
+        <h3>Introduction</h3>
+        <p>What BAOBAB is, who it's for, and the platforms it supports.</p>
+      </div>
+      <a href="{{ 'introduction/overview/' | url }}">Start here →</a>
+    </div>
+
+    <div class="documentation-card">
+      <div>
+        <span class="twemoji">{% include ".icons/lucide/network.svg" %}</span>
+        <h3>Architecture</h3>
+        <p>Repository structure, version management, and the build pipeline.</p>
+      </div>
+      <a href="{{ 'architecture/' | url }}">View architecture →</a>
+    </div>
+
+    <div class="documentation-card">
+      <div>
+        <span class="twemoji">{% include ".icons/lucide/play-circle.svg" %}</span>
+        <h3>Usage</h3>
+        <p>Run it locally, in VS Code Dev Containers, or in GitHub Codespaces.</p>
+      </div>
+      <a href="{{ 'usage/' | url }}">Get started →</a>
+    </div>
+
+    <div class="documentation-card">
+      <div>
+        <span class="twemoji">{% include ".icons/lucide/file-text.svg" %}</span>
+        <h3>Reference</h3>
+        <p>Build arguments, environment variables, and verification steps.</p>
+      </div>
+      <a href="{{ 'reference/' | url }}">Browse reference →</a>
+    </div>
+
+    <div class="documentation-card">
+      <div>
+        <span class="twemoji">{% include ".icons/lucide/folder.svg" %}</span>
+        <h3>Project</h3>
+        <p>Governance, contributing, roadmap, security, and licensing.</p>
+      </div>
+      <a href="{{ 'project/' | url }}">Learn more →</a>
+    </div>
+
+    <div class="documentation-card">
+      <div>
+        <span class="twemoji">{% include ".icons/lucide/help-circle.svg" %}</span>
+        <h3>Appendix</h3>
+        <p>FAQ, glossary, common commands, and external references.</p>
+      </div>
+      <a href="{{ 'appendix/' | url }}">See appendix →</a>
+    </div>
+
+  </div>
+</section>
