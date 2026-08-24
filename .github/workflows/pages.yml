@@ -77,6 +77,6 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: nabhold/shared/.github/workflows/pages-zensical.yml@v1
+    uses: nabhold/shared/.github/workflows/pages-zensical.yml@main
     with:
       python-version: ${{ needs.resolve-python-version.outputs.version }}
