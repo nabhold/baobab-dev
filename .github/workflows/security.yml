@@ -31,21 +31,19 @@
 #   invoked directly rather than through another nabhold/shared
 #   workflow_call layer — same reasoning as nabhold/baobab's security.yml.
 #
-# ⚠ SETUP REQUIRED BEFORE THIS WORKFLOW CAN RUN:
-#   The secrets-scan pin below is a PLACEHOLDER —
-#   security-secrets-scan.yml does not exist in nabhold/shared yet as of
-#   this writing (2026-08-25). Sequence:
-#     1. Merge security-secrets-scan.yml into nabhold/shared's main branch.
-#     2. Resolve the real commit SHA:
-#        `git ls-remote https://github.com/nabhold/shared.git main`
-#        (or a tagged release's SHA, once one is cut that includes it).
-#     3. Replace the placeholder below before merging this file — until
-#        then, the secrets-scan job fails at its first `uses:` step with
-#        an "unable to resolve action" error, not silently.
-#
 # CHANGE LOG (most recent first)
 # ------------------------------------------------------------------------------
+# * Re-pinned the nabhold/shared `uses:` line to the v1.1.0 tag —
+#   security-secrets-scan.yml shipped in that release. SHA is the tag's
+#   peeled/dereferenced commit (not the annotated tag object's own SHA),
+#   verified live via `git ls-remote --tags
+#   https://github.com/nabhold/shared.git v1.1.0 v1.1.0^{}` on
+#   2026-08-25 (f8df9b90ffe8fef5cbf6d14a9bcf868f723d1464), and confirmed
+#   present via `git ls-tree -r <that SHA> -- .github/workflows`.
 # * Initial version, this repo's first source-level security workflow.
+#   (Shipped with an honest 0000...0000 placeholder pin at the time,
+#   since security-secrets-scan.yml did not exist yet in nabhold/shared
+#   — see this file's git history for that revision.)
 # ==============================================================================
 
 name: Security
@@ -68,8 +66,10 @@ jobs:
     name: Secret scanning
     permissions:
       contents: read
-    # PLACEHOLDER — see "SETUP REQUIRED" above.
-    uses: nabhold/shared/.github/workflows/security-secrets-scan.yml@0000000000000000000000000000000000000000 # TODO: replace after nabhold/shared adopts this workflow — see header
+    # SHA is nabhold/shared's v1.1.0 tag (annotated — peeled commit, not
+    # the tag object's own SHA), verified live via `git ls-remote --tags
+    # https://github.com/nabhold/shared.git v1.1.0 v1.1.0^{}` on 2026-08-25.
+    uses: nabhold/shared/.github/workflows/security-secrets-scan.yml@f8df9b90ffe8fef5cbf6d14a9bcf868f723d1464 # v1.1.0
 
   dependency-review:
     name: Dependency review
