@@ -33,7 +33,16 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    uses: nabhold/shared/.github/workflows/greetings.yml@v1
+    # SHA is nabhold/shared's v1.0.0 tag (annotated tag — this is the
+    # peeled commit, not the tag object's own SHA), verified live via
+    # `git ls-remote --tags https://github.com/nabhold/shared.git v1.0.0`
+    # on 2026-08-25. Future nabhold/shared releases should flow through
+    # Dependabot from here (see .github/dependabot.yml's github-actions
+    # entry) — but re-verify manually on the first bump PR regardless,
+    # since Dependabot has a documented issue (dependabot-core#14716)
+    # resolving updates correctly the first time a previously-untagged
+    # pin moves onto an actual tag.
+    uses: nabhold/shared/.github/workflows/greetings.yml@ad5cdb028023cd6b9c48cd8d7e6151ef4ab0cd73 # v1.0.0
     with:
       issue-message: |
         👋 Thanks for opening your first issue in **BAOBAB Enterprise Platform**!

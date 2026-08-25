@@ -65,8 +65,13 @@ jobs:
       version: ${{ steps.resolve.outputs.value }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # SHA is nabhold/shared's v1.0.0 tag (annotated — this is the
+      # peeled commit, not the tag object's own SHA), verified live via
+      # `git ls-remote --tags https://github.com/nabhold/shared.git
+      # v1.0.0` on 2026-08-25. See the same note in greetings.yml above
+      # re: Dependabot and dependabot-core#14716.
       - id: resolve
-        uses: nabhold/shared/.github/actions/derive-value-from-yaml@main
+        uses: nabhold/shared/.github/actions/derive-value-from-yaml@ad5cdb028023cd6b9c48cd8d7e6151ef4ab0cd73 # v1.0.0
         with:
           manifest-path: config/versions.yaml   # TODO: adjust if this repo's manifest differs
           query: ".languages.python.version"    # TODO: adjust query path if schema differs
@@ -77,6 +82,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
-    uses: nabhold/shared/.github/workflows/pages-zensical.yml@main
+    # Same pin/rationale as resolve-python-version's step above.
+    uses: nabhold/shared/.github/workflows/pages-zensical.yml@ad5cdb028023cd6b9c48cd8d7e6151ef4ab0cd73 # v1.0.0
     with:
       python-version: ${{ needs.resolve-python-version.outputs.version }}
