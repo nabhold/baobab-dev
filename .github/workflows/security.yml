@@ -1,0 +1,85 @@
+# ==============================================================================
+# BAOBAB Enterprise Platform
+# Security (source-level)
+#
+# File: .github/workflows/security.yml
+#
+# PURPOSE:
+#   Adds source-level secret scanning for this repository — previously
+#   the only security scanning here was Trivy's container-filesystem
+#   scan inside publish.yml, which never looks at the repository's own
+#   git history (its Dockerfiles, shell scripts, config/versions.yaml,
+#   etc). Delegates to nabhold/shared's reusable
+#   security-secrets-scan.yml, same pattern as this repo's pages.yml and
+#   greetings.yml.
+#
+# WHY THIS FILE IS NARROWER THAN nabhold/baobab's security.yml:
+#   nabhold/baobab's equivalent file also runs CodeQL and Bandit/
+#   pip-audit — both are Python-application checks and this repository
+#   has no Python application source to scan (CodeQL has no extractor
+#   for plain shell/Dockerfile, and there is no `security` uv
+#   dependency-group here because there is nothing for Bandit to point
+#   at). Secret scanning and dependency review are the two checks that
+#   are genuinely toolchain-agnostic, so those are the two this repo
+#   adopts. Trivy's own image-layer secret scan
+#   (`--scanners vuln,secret` in publish.yml) stays exactly where it is —
+#   it scans a different thing (the built container filesystem) than
+#   this file does (the git-committed source), so the two are
+#   complementary, not redundant.
+#
+#   `dependency-review` is GitHub's own actions/dependency-review-action,
+#   invoked directly rather than through another nabhold/shared
+#   workflow_call layer — same reasoning as nabhold/baobab's security.yml.
+#
+# ⚠ SETUP REQUIRED BEFORE THIS WORKFLOW CAN RUN:
+#   The secrets-scan pin below is a PLACEHOLDER —
+#   security-secrets-scan.yml does not exist in nabhold/shared yet as of
+#   this writing (2026-08-25). Sequence:
+#     1. Merge security-secrets-scan.yml into nabhold/shared's main branch.
+#     2. Resolve the real commit SHA:
+#        `git ls-remote https://github.com/nabhold/shared.git main`
+#        (or a tagged release's SHA, once one is cut that includes it).
+#     3. Replace the placeholder below before merging this file — until
+#        then, the secrets-scan job fails at its first `uses:` step with
+#        an "unable to resolve action" error, not silently.
+#
+# CHANGE LOG (most recent first)
+# ------------------------------------------------------------------------------
+# * Initial version, this repo's first source-level security workflow.
+# ==============================================================================
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly — staggered against this repo's own Monday 00:00 UTC
+    # update-lockfile.yml schedule to avoid queueing both at once.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets-scan:
+    name: Secret scanning
+    permissions:
+      contents: read
+    # PLACEHOLDER — see "SETUP REQUIRED" above.
+    uses: nabhold/shared/.github/workflows/security-secrets-scan.yml@0000000000000000000000000000000000000000 # TODO: replace after nabhold/shared adopts this workflow — see header
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
