@@ -76,6 +76,16 @@ fi
 : "${EXPECTED_UID:=1000}"
 : "${EXPECTED_GID:=1000}"
 
+# BAOBAB_BUILD_PROFILE identifies which Dockerfile target produced THIS
+# image (full / frontend / frontend-e2e) — baked in via ENV in each target,
+# not something a repo sets. Defaulting to "full" here means every existing
+# image that predates this variable (i.e. every image built before the
+# frontend/frontend-e2e targets existed) behaves EXACTLY as before: every
+# check below still runs, nothing is newly skipped. Only images actually
+# built FROM a frontend/frontend-e2e target, which explicitly set this ENV
+# themselves, get the narrower check set.
+: "${BAOBAB_BUILD_PROFILE:=full}"
+
 ###############################################################################
 # Output helpers
 ###############################################################################
@@ -232,6 +242,18 @@ check_contract() {
 
     say "  Declared profile: ${profile}"
 
+    # Cross-check: does THIS running image's own build profile match what
+    # the repo declares it needs? Without this, a `frontend` image whose
+    # capabilities.yaml still technically "lists" a `full` section (it
+    # documents everything baobab-dev CAN provide, not just what THIS
+    # build actually has) could give a false pass on the wrong image
+    # variant. BAOBAB_BUILD_PROFILE is baked in via ENV per Dockerfile
+    # target — it is not something a repo's environment.yaml sets.
+    if [[ "${BAOBAB_BUILD_PROFILE}" != "${profile}" ]]; then
+        bad "This image was built with profile '${BAOBAB_BUILD_PROFILE}' but the repo declares '${profile}' — wrong image variant"
+        return
+    fi
+
     local cap cap_value
     while IFS= read -r cap; do
         [[ -z "$cap" ]] && continue
@@ -259,6 +281,8 @@ else
     say "Configuration : built-in defaults"
 fi
 
+say "Profile       : ${BAOBAB_BUILD_PROFILE}"
+
 ###############################################################################
 # Core
 ###############################################################################
@@ -276,29 +300,35 @@ check_required "sudo" sudo
 
 section "Python"
 
-check_required \
-    "Python ${PYTHON_VERSION}" \
-    "python${PYTHON_MINOR}" \
-    "python${PYTHON_MINOR} --version"
+if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
 
-check_required "pip" pip3
-check_required "pipx" pipx
-check_required "uv" uv
-check_required "Poetry" poetry
+    check_required \
+        "Python ${PYTHON_VERSION}" \
+        "python${PYTHON_MINOR}" \
+        "python${PYTHON_MINOR} --version"
 
-if command -v poetry >/dev/null; then
+    check_required "pip" pip3
+    check_required "pipx" pipx
+    check_required "uv" uv
+    check_required "Poetry" poetry
 
-    poetry_setting=""
-    set +e
-    poetry_setting="$(poetry config virtualenvs.in-project 2>/dev/null)"
-    set -e
+    if command -v poetry >/dev/null; then
 
-    if [[ "$poetry_setting" == "true" ]]; then
-        ok "Poetry configured for in-project virtualenvs"
-    else
-        warnc "Poetry virtualenvs.in-project=${poetry_setting:-unknown}"
+        poetry_setting=""
+        set +e
+        poetry_setting="$(poetry config virtualenvs.in-project 2>/dev/null)"
+        set -e
+
+        if [[ "$poetry_setting" == "true" ]]; then
+            ok "Poetry configured for in-project virtualenvs"
+        else
+            warnc "Poetry virtualenvs.in-project=${poetry_setting:-unknown}"
+        fi
+
     fi
 
+else
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Python"
 fi
 
 ###############################################################################
@@ -318,19 +348,25 @@ check_optional "Yarn" yarn
 
 section "Flutter"
 
-check_required "Flutter" flutter
-check_required "Dart" dart
+if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
 
-if [[ "$QUIET" -eq 0 ]] && command -v flutter >/dev/null; then
+    check_required "Flutter" flutter
+    check_required "Dart" dart
 
-    flutter doctor --no-version-check >"${TMP_FLUTTER_LOG}" 2>&1 || true
+    if [[ "$QUIET" -eq 0 ]] && command -v flutter >/dev/null; then
 
-    if grep -q "No issues found" "${TMP_FLUTTER_LOG}"; then
-        ok "flutter doctor reports healthy environment"
-    else
-        warnc "flutter doctor reports warnings"
+        flutter doctor --no-version-check >"${TMP_FLUTTER_LOG}" 2>&1 || true
+
+        if grep -q "No issues found" "${TMP_FLUTTER_LOG}"; then
+            ok "flutter doctor reports healthy environment"
+        else
+            warnc "flutter doctor reports warnings"
+        fi
+
     fi
 
+else
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Flutter"
 fi
 
 ###############################################################################
@@ -339,8 +375,12 @@ fi
 
 section "Database"
 
-check_required "PostgreSQL client" psql
-check_required "Redis CLI" redis-cli
+if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
+    check_required "PostgreSQL client" psql
+    check_required "Redis CLI" redis-cli
+else
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include database clients"
+fi
 
 ###############################################################################
 # Docker
@@ -348,22 +388,32 @@ check_required "Redis CLI" redis-cli
 
 section "Containers"
 
-check_required "Docker CLI" docker
+if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
 
-if command -v docker >/dev/null; then
+    check_required "Docker CLI" docker
 
-    if docker compose version >/dev/null 2>&1; then
-        ok "Docker Compose plugin"
-    else
-        bad "Docker Compose plugin missing"
+    if command -v docker >/dev/null; then
+
+        if docker compose version >/dev/null 2>&1; then
+            ok "Docker Compose plugin"
+        else
+            bad "Docker Compose plugin missing"
+        fi
+
+        if docker info >/dev/null 2>&1; then
+            ok "Docker daemon reachable"
+        else
+            warnc "Docker daemon unavailable"
+        fi
+
     fi
 
-    if docker info >/dev/null 2>&1; then
-        ok "Docker daemon reachable"
-    else
-        warnc "Docker daemon unavailable"
-    fi
-
+else
+    # ASSUMPTION: neither frontend nor frontend-e2e includes Docker CLI —
+    # matches capabilities.yaml, which only lists `docker` under `full`.
+    # Revisit if a digital-estate repo later needs local containerized
+    # services (e.g. a local mock backend).
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Docker CLI"
 fi
 
 ###############################################################################

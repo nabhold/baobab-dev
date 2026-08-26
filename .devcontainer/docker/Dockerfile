@@ -324,9 +324,21 @@ RUN set -euo pipefail; \
     rm -rf /tmp/cli-tools/*
 
 # -----------------------------------------------------------------------------
-# Stage: final — the actual dev container image
+# Stage: base — shared foundation for every final image variant (full,
+# frontend, frontend-e2e)
+#
+# RESTRUCTURED (baobab-dev-v1_1_0-release-plan-amended.md, tasks 1.9/1.10;
+# ADR-0001, nabhold/shared). Previously this was the start of a single
+# monolithic `final` stage that installed Python, Node, and Flutter
+# sequentially with no way to build a subset of them. Extracted here as its
+# own stage — sections 1-2 of the pre-restructuring file, content
+# byte-identical to before, only the stage boundary is new.
+#
+# Deliberately does NOT install anything language-specific — that's what
+# with-node/frontend/frontend-e2e/final below do, each pulling in only what
+# their profile actually needs.
 # -----------------------------------------------------------------------------
-FROM ubuntu:${UBUNTU_VERSION} AS final
+FROM ubuntu:${UBUNTU_VERSION} AS base
 
 ARG TARGETARCH
 # Build metadata supplied by GitHub Actions
@@ -352,21 +364,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
     PIP_NO_CACHE_DIR=1
 
-# PIP_NO_CACHE_DIR is set here — before section 3 (Python toolchain) and
-# section 4's pipx/Poetry install even start — deliberately, not in
-# section 10's later ENV block. ENV only affects layers that come AFTER
-# it in the Dockerfile; the section 3 setuptools/msgpack upgrade and the
-# `pipx install poetry` step both run well before section 10, so setting
-# this there would have had zero effect on either of them. Trivy's
-# aggregate scan was still reporting the pre-fix setuptools/msgpack
-# versions despite the explicit `pip install --upgrade` in section 3
-# because pip's own HTTP cache (unrelated to Docker's build-layer cache)
-# had already stored the older wheel from before `--no-cache-dir` was
-# added to that line — and a cache hit short-circuits the "download the
-# newer wheel" step entirely, regardless of what --upgrade requests.
-# Every pip invocation in this stage now skips that cache outright, so
-# there is no stale wheel left to be picked up by any install, upgrade,
-# or future re-run of this layer.
+# PIP_NO_CACHE_DIR is set here — before Python toolchain and pipx/Poetry
+# install even start — deliberately, not in the later global-env block.
+# ENV only affects layers that come AFTER it in the Dockerfile; the
+# setuptools/msgpack upgrade and the `pipx install poetry` step both run
+# well before that later block, so setting this there would have had zero
+# effect on either of them. Trivy's aggregate scan was still reporting the
+# pre-fix setuptools/msgpack versions despite the explicit
+# `pip install --upgrade` because pip's own HTTP cache (unrelated to
+# Docker's build-layer cache) had already stored the older wheel from
+# before `--no-cache-dir` was added to that line — and a cache hit
+# short-circuits the "download the newer wheel" step entirely, regardless
+# of what --upgrade requests. Every pip invocation in this stage now skips
+# that cache outright, so there is no stale wheel left to be picked up by
+# any install, upgrade, or future re-run of this layer. This reasoning is
+# unchanged by the stage split — `base` is still upstream of every profile
+# that installs Python.
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -435,6 +448,269 @@ COPY config/versions.lock /usr/local/share/baobab/config/versions.lock
 COPY --chmod=0755 config/resolve.sh /usr/local/share/baobab/config/resolve.sh
 
 ENV BAOBAB_CONFIG_DIR=/usr/local/share/baobab/config
+
+
+# -----------------------------------------------------------------------------
+# Stage: with-node — adds Node.js/npm/pnpm/yarn on top of base
+#
+# Every profile (full, frontend, frontend-e2e) needs Node — this is the
+# shared branch point all three descend from. Content below is
+# byte-identical to the original monolithic stage's Node.js section, moved
+# earlier in the file (it used to run after Python) purely so it can be a
+# shared ancestor for `frontend`/`frontend-e2e` without dragging Python in
+# too — no change to the commands themselves.
+# -----------------------------------------------------------------------------
+FROM base AS with-node
+
+# -----------------------------------------------------------------------------
+# 4. Node.js LTS, npm, pnpm, yarn
+# -----------------------------------------------------------------------------
+# NodeSource's own setup_${NODE_MAJOR}.x script (curl | bash) does nothing
+# more than add their GPG key and an apt source entry — the same shape as
+# the Docker CLI, GitHub CLI, and PostgreSQL setup blocks elsewhere in this
+# stage. Piping a remote script into bash is one of the few places in this
+# file that executed arbitrary remote code sight-unseen rather than adding
+# a package source the same explicit way everything else here does, so it's
+# replaced with the manual equivalent NodeSource itself documents at
+# https://github.com/nodesource/distributions/wiki/Repository-Manual-Installation.
+#
+# pnpm is pinned to the exact resolved PNPM_VERSION — `corepack prepare
+# pnpm@latest` previously ignored versions.lock entirely, the same gap
+# Poetry had (see the Python toolchain section, further down in this file
+# now that Node has been moved ahead of it for stage-sharing purposes).
+# npm's own registry-level integrity check (Subresource
+# Integrity, sha512) is what verifies the package on install; there's
+# nothing for this Dockerfile to additionally check by hand, matching
+# versions.yaml's own pnpm.source: npm declaration. yarn has no
+# corresponding entry in versions.yaml at all (no version to pin), so
+# `@stable` is left as-is — not an oversight, there's nothing to pin it to
+# yet.
+#
+# npm is explicitly self-upgraded to latest right after install. The npm
+# build bundled inside NodeSource's Node ${NODE_MAJOR}.x tarball carries
+# its own frozen node_modules (tar, brace-expansion, ip-address, undici),
+# independent of NODE_MAJOR tracking — live-checked (2026-08-13) against
+# npm's own package-lock.json at the latest published release (12.0.2):
+# that release alone already resolves the CRITICAL tar finding (CVE-2026-
+# 59873, needs 7.5.19, npm 12.0.2 bundles exactly that) plus CVE-2026-
+# 59874 (tar) and CVE-2026-12151 (undici). Two brace-expansion CVEs and
+# one ip-address CVE remain genuinely unfixed even in npm's own latest
+# release — see .trivyignore for those, investigated the same way.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    chmod a+r /etc/apt/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] \
+        https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs && \
+    npm install -g npm@latest && \
+    corepack enable && \
+    corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
+    corepack prepare yarn@stable --activate
+
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Stage: frontend — Node/pnpm/Turborepo only, for the four digital-estate
+# repos (nabhold/nabhold, zuribeans, thamani, equator-estate). Branches
+# directly off with-node, NOT off `final` below and not the reverse either
+# — deliberate sibling relationship so a Turborepo version bump can never
+# invalidate the Python/Flutter layers `final` depends on, and vice versa.
+#
+# NEW stage (baobab-dev-v1_1_0-release-plan-amended.md task 1.9; ADR-0001).
+# -----------------------------------------------------------------------------
+FROM with-node AS frontend
+
+# ARGs do NOT propagate across stage boundaries the way ENV does — each
+# stage that references a build ARG in its own instructions must re-declare
+# it, even when deriving FROM a previous internal stage. Without this,
+# ${VERSION}/${BUILD_DATE}/${REVISION} below would silently resolve to
+# empty strings — no build error, just a wrong (empty) image version baked
+# in. Caught during design, not via a failed build.
+ARG BUILD_DATE
+ARG VERSION
+ARG REVISION
+
+# Turborepo — npm-sourced, resolved the same way pnpm is (no compiled
+# per-architecture binary the way ripgrep/task/uv/gh/cosign have; npm's own
+# install-time integrity checking is the verification mechanism here).
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
+    npm install -g "turbo@${TURBO_VERSION}"
+
+# fzf, tmux, bash-completion, GitHub CLI + a SUBSET of cli-tools' checksummed
+# binaries — same source and verification as `final`'s equivalent block,
+# deliberately excluding `uv`/`uvx` (Python-only, this profile has no
+# Python) and `cosign` (image-signing tool, not a frontend-repo need per
+# nabhold/shared's capabilities.yaml).
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends fzf tmux bash-completion
+
+COPY --from=cli-tools /opt/cli-tools/bin/rg   /usr/local/bin/rg
+COPY --from=cli-tools /opt/cli-tools/bin/fd   /usr/local/bin/fd
+COPY --from=cli-tools /opt/cli-tools/bin/bat  /usr/local/bin/bat
+COPY --from=cli-tools /opt/cli-tools/bin/eza  /usr/local/bin/eza
+COPY --from=cli-tools /opt/cli-tools/bin/task /usr/local/bin/task
+COPY --from=cli-tools /opt/cli-tools/bin/yq   /usr/local/bin/yq
+COPY --from=cli-tools /opt/cli-tools/bin/gh   /usr/local/bin/gh
+RUN chmod +x /usr/local/bin/rg /usr/local/bin/fd /usr/local/bin/bat \
+      /usr/local/bin/eza /usr/local/bin/task /usr/local/bin/yq /usr/local/bin/gh
+
+# Non-root user creation — byte-identical to `final`'s equivalent block.
+RUN if id "ubuntu" &>/dev/null; then userdel -r ubuntu; fi && \
+    if getent group ubuntu &>/dev/null; then groupdel ubuntu; fi && \
+    groupadd --gid 1000 vscode && \
+    useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home vscode && \
+    echo "vscode ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vscode && \
+    chmod 0440 /etc/sudoers.d/vscode && \
+    mkdir -p /workspaces /home/vscode/.local/bin && \
+    chown -R vscode:vscode /workspaces /home/vscode
+
+# Global environment — narrower than `final`: no Flutter/pub-cache paths,
+# no Python/Poetry-specific vars (PYTHONUNBUFFERED, PIP_DISABLE_PIP_VERSION_
+# CHECK, POETRY_*). BAOBAB_BUILD_PROFILE=frontend is the load-bearing
+# addition that makes baobab-verify's profile gating (see verify.sh)
+# actually correct for this image — without it, baobab-verify would
+# default to "full" and fail on every Python/Flutter/Postgres/Docker check
+# this profile deliberately never installs.
+ENV PATH="/home/vscode/.local/bin:/usr/local/bin:${PATH}" \
+    BAOBAB_BUILD_PROFILE=frontend \
+    BAOBAB_IMAGE_VERSION=${VERSION} \
+    BAOBAB_BUILD_DATE=${BUILD_DATE} \
+    BAOBAB_GIT_REVISION=${REVISION}
+
+# Shell completions — gh only. No Poetry completion (Poetry isn't part of
+# this profile); no Docker completion (Docker CLI isn't installed here
+# either, per capabilities.yaml).
+RUN mkdir -p /etc/bash_completion.d && \
+    gh completion -s bash > /etc/bash_completion.d/gh
+
+COPY --chown=vscode:vscode config/bashrc.d/ /etc/bashrc.d/
+RUN echo '\n# BAOBAB devcontainer shell enhancements\nfor f in /etc/bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done' \
+      >> /etc/bash.bashrc
+
+# Helper commands — byte-identical to `final`'s equivalent block. No Poetry
+# config line: Poetry isn't installed in this profile, so
+# `poetry config virtualenvs.in-project true` would simply fail here.
+COPY --chmod=0755 scripts/bootstrap.sh    /usr/local/bin/baobab-bootstrap
+COPY --chmod=0755 scripts/post-create.sh  /usr/local/bin/baobab-post-create
+COPY --chmod=0755 scripts/summary.sh      /usr/local/bin/baobab-summary
+COPY --chmod=0755 scripts/verify.sh       /usr/local/bin/baobab-verify
+
+USER vscode
+WORKDIR /workspaces
+
+# -----------------------------------------------------------------------------
+# 13. Build-time verification
+#
+# Fail the image build itself if the toolchain isn't in the state baobab-
+# verify expects (correct versions on PATH, correct user/UID/GID, passwordless
+# sudo, etc.) rather than shipping a broken image and discovering it later.
+# Runs as `vscode`, after the USER switch above, since baobab-verify checks
+# the runtime user identity.
+# -----------------------------------------------------------------------------
+
+RUN baobab-verify 
+
+HEALTHCHECK \
+    --interval=60s \
+    --timeout=10s \
+    --start-period=15s \
+    --retries=3 \
+    CMD baobab-verify || exit 1
+
+CMD ["sleep", "infinity"]
+# -----------------------------------------------------------------------------
+# Stage: frontend-e2e — extends `frontend` with browser-dependent tooling
+# for end-to-end testing, image processing, and performance auditing.
+#
+# NOT a daily devcontainer image — a repo's own .nabhold/environment.yaml
+# should declare `profile: frontend`, never `frontend-e2e`; a CI test
+# workflow references this tag directly instead (see nabhold/shared's
+# development-environment schema, "frontend-e2e is a CI-only profile").
+# Kept as a SEPARATE stage from `frontend` (not merged into it) specifically
+# so daily interactive development never carries Playwright's browser
+# binaries or their CVE surface — that cost is paid only in CI jobs that
+# actually need it.
+#
+# NEW stage (baobab-dev-v1_1_0-release-plan-amended.md task 1.10; ADR-0001).
+# This is the step most likely to need its own hardening cycle — Playwright
+# installs real browser binaries (Chromium/Firefox/WebKit), which is a
+# materially different CVE surface than anything else in this file.
+# -----------------------------------------------------------------------------
+FROM frontend AS frontend-e2e
+
+USER root
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    --mount=type=cache,target=/root/.npm,sharing=locked \
+    . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
+    npm install -g \
+        "playwright@${PLAYWRIGHT_VERSION}" \
+        "sharp@${SHARP_VERSION}" \
+        "lighthouse@${LIGHTHOUSE_VERSION}" && \
+    npx playwright install --with-deps chromium firefox webkit
+
+# Lighthouse deliberately does NOT get its own browser install — it reuses
+# the Chromium binary Playwright just installed above. Do not add a second
+# Chromium install path for Lighthouse; that would double the browser-
+# binary CVE surface for no benefit.
+
+ENV BAOBAB_BUILD_PROFILE=frontend-e2e
+
+USER vscode
+
+# -----------------------------------------------------------------------------
+# 13. Build-time verification
+#
+# Fail the image build itself if the toolchain isn't in the state baobab-
+# verify expects (correct versions on PATH, correct user/UID/GID, passwordless
+# sudo, etc.) rather than shipping a broken image and discovering it later.
+# Runs as `vscode`, after the USER switch above, since baobab-verify checks
+# the runtime user identity.
+# -----------------------------------------------------------------------------
+
+RUN baobab-verify 
+
+HEALTHCHECK \
+    --interval=60s \
+    --timeout=10s \
+    --start-period=15s \
+    --retries=3 \
+    CMD baobab-verify || exit 1
+
+CMD ["sleep", "infinity"]
+# -----------------------------------------------------------------------------
+# Stage: final — the full development image. Behavior UNCHANGED from before
+# this restructuring; branches off with-node just like `frontend` does (a
+# sibling, not a descendant of `frontend`) so that bumping Turborepo/
+# Playwright/Sharp/Lighthouse can never invalidate this stage's Python/
+# Flutter build cache, and vice versa.
+#
+# Remains the LAST stage in this file deliberately: publish.yml's existing
+# build (which specifies no --target) builds whatever stage is last, so
+# this ordering is what makes today's default build keep producing exactly
+# this image, unchanged, without any publish.yml edit required for this
+# step.
+# -----------------------------------------------------------------------------
+FROM with-node AS final
+
+# Same ARG re-declaration requirement as `frontend` above — see that
+# stage's comment for why this is necessary, not redundant.
+ARG BUILD_DATE
+ARG VERSION
+ARG REVISION
 
 # -----------------------------------------------------------------------------
 # 3. Python toolchain. The minor version (e.g. "3.14") is derived from
@@ -583,57 +859,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # intentionally NOT baked in here — they belong to the project's own
 # pyproject.toml / poetry.lock and are installed by post-create.sh on
 # container creation, keeping this base image framework-version-agnostic.
-# -----------------------------------------------------------------------------
-# 4. Node.js LTS, npm, pnpm, yarn
-# -----------------------------------------------------------------------------
-# NodeSource's own setup_${NODE_MAJOR}.x script (curl | bash) does nothing
-# more than add their GPG key and an apt source entry — the same shape as
-# the Docker CLI, GitHub CLI, and PostgreSQL setup blocks elsewhere in this
-# stage. Piping a remote script into bash is one of the few places in this
-# file that executed arbitrary remote code sight-unseen rather than adding
-# a package source the same explicit way everything else here does, so it's
-# replaced with the manual equivalent NodeSource itself documents at
-# https://github.com/nodesource/distributions/wiki/Repository-Manual-Installation.
-#
-# pnpm is pinned to the exact resolved PNPM_VERSION — `corepack prepare
-# pnpm@latest` previously ignored versions.lock entirely, the same gap
-# Poetry had above. npm's own registry-level integrity check (Subresource
-# Integrity, sha512) is what verifies the package on install; there's
-# nothing for this Dockerfile to additionally check by hand, matching
-# versions.yaml's own pnpm.source: npm declaration. yarn has no
-# corresponding entry in versions.yaml at all (no version to pin), so
-# `@stable` is left as-is — not an oversight, there's nothing to pin it to
-# yet.
-#
-# npm is explicitly self-upgraded to latest right after install. The npm
-# build bundled inside NodeSource's Node ${NODE_MAJOR}.x tarball carries
-# its own frozen node_modules (tar, brace-expansion, ip-address, undici),
-# independent of NODE_MAJOR tracking — live-checked (2026-08-13) against
-# npm's own package-lock.json at the latest published release (12.0.2):
-# that release alone already resolves the CRITICAL tar finding (CVE-2026-
-# 59873, needs 7.5.19, npm 12.0.2 bundles exactly that) plus CVE-2026-
-# 59874 (tar) and CVE-2026-12151 (undici). Two brace-expansion CVEs and
-# one ip-address CVE remain genuinely unfixed even in npm's own latest
-# release — see .trivyignore for those, investigated the same way.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    --mount=type=cache,target=/root/.npm,sharing=locked \
-    . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
-    install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-      | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    chmod a+r /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] \
-        https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
-      > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends nodejs && \
-    npm install -g npm@latest && \
-    corepack enable && \
-    corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
-    corepack prepare yarn@stable --activate
-
-# -----------------------------------------------------------------------------
 # 5. Flutter + Dart (copied from the flutter-sdk builder stage)
 # -----------------------------------------------------------------------------
 COPY --from=flutter-sdk /opt/flutter-tmp /opt/flutter
@@ -751,12 +976,19 @@ RUN if id "ubuntu" &>/dev/null; then userdel -r ubuntu; fi && \
 # -----------------------------------------------------------------------------
 # 10. Global environment configuration
 # -----------------------------------------------------------------------------
+# BAOBAB_BUILD_PROFILE=full is a NEW, explicit addition here — verify.sh
+# already defaults to "full" when this var is unset, so this doesn't change
+# behavior, but relying on that implicit default forever (rather than every
+# stage declaring its own profile explicitly, the way frontend/frontend-e2e
+# now do) is exactly the kind of silent-convention drift this project's own
+# hardening history has repeatedly had to dig back out of.
 ENV PATH="/home/vscode/.local/bin:/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:/usr/local/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=true \
     POETRY_NO_INTERACTION=1 \
+    BAOBAB_BUILD_PROFILE=full \
     BAOBAB_IMAGE_VERSION=${VERSION} \
     BAOBAB_BUILD_DATE=${BUILD_DATE} \
     BAOBAB_GIT_REVISION=${REVISION}

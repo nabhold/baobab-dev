@@ -161,6 +161,39 @@ flutter_sha256_for_version() {
         head -n1
 }
 
+# npm-sourced tools (pnpm, turbo, playwright, sharp, lighthouse) have no
+# GitHub Releases API equivalent worth using here — they're versioned and
+# distributed via the npm registry itself, which publishes a canonical
+# "latest" endpoint per package. This is the npm-registry analogue of
+# github_latest()/resolve_github() below, not a replacement for them: any
+# tool actually fetched as a GitHub release binary (task, uv, gh, cosign)
+# still uses the GitHub path, since npm's registry has no equivalent
+# concept of a platform-specific release asset for those.
+npm_latest() {
+
+    local package="$1"
+
+    curl -fsSL "https://registry.npmjs.org/${package}/latest" |
+        yq -p json -o json -r '.version'
+}
+
+resolve_npm() {
+
+    local yaml_path="$1"
+    local package="$2"
+
+    local version
+
+    version=$(yaml "$yaml_path")
+
+    if [[ "$version" == "latest" ]]; then
+        info "Resolving ${package} (npm)..."
+        npm_latest "$package"
+    else
+        printf "%s" "$version"
+    fi
+}
+
 # ------------------------------------------------------------------------------
 # Read versions
 # ------------------------------------------------------------------------------
@@ -187,6 +220,33 @@ FLUTTER_SHA256=$(flutter_sha256_for_version "${FLUTTER_VERSION}")
 
 [[ -n "$FLUTTER_SHA256" && "$FLUTTER_SHA256" != "null" ]] \
     || die "Flutter's release manifest has no sha256 for stable version ${FLUTTER_VERSION}."
+
+# ------------------------------------------------------------------------------
+# Package managers (pnpm, Poetry, uv)
+#
+# FIX: these three were previously never resolved at all — versions.lock
+# never contained PNPM_VERSION, POETRY_VERSION, or UV_VERSION despite the
+# Dockerfile depending on all three (corepack prepare "pnpm@${PNPM_VERSION}",
+# pipx install "poetry==${POETRY_VERSION}", and the entire uv fetch_verify
+# block in the cli-tools stage). Under the Dockerfile's own set -u contexts
+# this is a genuine unbound-variable failure waiting to happen the next time
+# this resolver actually runs in CI, not a hypothetical.
+#
+# pnpm: source: npm in versions.yaml — resolved via the npm registry.
+# Poetry: source: github in versions.yaml — version discovery happens
+#   against python-poetry/poetry's tags even though the actual install is a
+#   pipx/PyPI install, not a GitHub binary download; no asset/checksum
+#   pair needed, pip's own install-time SRI hash verification covers it.
+# uv: source: github — a real compiled binary per architecture, needs the
+#   same asset+checksum treatment as ripgrep/fd/bat/eza below, not just a
+#   bare version string.
+# ------------------------------------------------------------------------------
+
+PNPM_VERSION=$(resolve_npm '.package_managers.pnpm.version' 'pnpm')
+
+POETRY_VERSION=$(resolve_github '.package_managers.poetry.version' 'python-poetry/poetry')
+
+UV_VERSION=$(resolve_github '.package_managers.uv.version' 'astral-sh/uv')
 
 # ------------------------------------------------------------------------------
 # GitHub tools
@@ -258,6 +318,69 @@ EZA_SHA256_AMD64=$(github_asset_digest "eza-community/eza" "v${EZA_VERSION}" "${
 EZA_ASSET_ARM64="eza_aarch64-unknown-linux-gnu.tar.gz"
 EZA_SHA256_ARM64=$(github_asset_digest "eza-community/eza" "v${EZA_VERSION}" "${EZA_ASSET_ARM64}")
 
+# ------------------------------------------------------------------------------
+# FIX: checksums for task, uv, gh, cosign
+#
+# The Dockerfile's cli-tools stage has referenced TASK_ASSET_*/TASK_SHA256_*,
+# UV_ASSET_*/UV_SHA256_*, GH_ASSET_*/GH_SHA256_*, and COSIGN_ASSET_*/
+# COSIGN_SHA256_* since the "Wired up every checksum config/resolve.sh now
+# computes" change — but this resolver never actually computed any of them.
+# Under `set -euo pipefail` (explicitly set at the top of that RUN block),
+# the very first missing one (`${!TASK_ASSET}`) would abort the entire
+# cli-tools stage with "unbound variable" the next time this resolver's
+# output was actually consumed by a real `docker build`.
+#
+# Asset naming per tool (verified against each project's actual GitHub
+# Releases, not assumed from convention):
+#   task   — task_linux_<arch>.tar.gz,                 tag v<version>
+#   uv     — uv-<arch-triple>-unknown-linux-gnu.tar.gz, tag <version> (no v)
+#   gh     — gh_<version>_linux_<arch>.tar.gz,          tag v<version>
+#   cosign — cosign-linux-<arch> (RAW BINARY, no archive), tag v<version>
+# ------------------------------------------------------------------------------
+
+info "Fetching task checksums..."
+TASK_ASSET_AMD64="task_linux_amd64.tar.gz"
+TASK_SHA256_AMD64=$(github_asset_digest "go-task/task" "v${TASK_VERSION}" "${TASK_ASSET_AMD64}")
+TASK_ASSET_ARM64="task_linux_arm64.tar.gz"
+TASK_SHA256_ARM64=$(github_asset_digest "go-task/task" "v${TASK_VERSION}" "${TASK_ASSET_ARM64}")
+
+info "Fetching uv checksums..."
+UV_ASSET_AMD64="uv-x86_64-unknown-linux-gnu.tar.gz"
+UV_SHA256_AMD64=$(github_asset_digest "astral-sh/uv" "${UV_VERSION}" "${UV_ASSET_AMD64}")
+UV_ASSET_ARM64="uv-aarch64-unknown-linux-gnu.tar.gz"
+UV_SHA256_ARM64=$(github_asset_digest "astral-sh/uv" "${UV_VERSION}" "${UV_ASSET_ARM64}")
+
+info "Fetching gh checksums..."
+GH_ASSET_AMD64="gh_${GH_VERSION}_linux_amd64.tar.gz"
+GH_SHA256_AMD64=$(github_asset_digest "cli/cli" "v${GH_VERSION}" "${GH_ASSET_AMD64}")
+GH_ASSET_ARM64="gh_${GH_VERSION}_linux_arm64.tar.gz"
+GH_SHA256_ARM64=$(github_asset_digest "cli/cli" "v${GH_VERSION}" "${GH_ASSET_ARM64}")
+
+info "Fetching cosign checksums..."
+COSIGN_ASSET_AMD64="cosign-linux-amd64"
+COSIGN_SHA256_AMD64=$(github_asset_digest "sigstore/cosign" "v${COSIGN_VERSION}" "${COSIGN_ASSET_AMD64}")
+COSIGN_ASSET_ARM64="cosign-linux-arm64"
+COSIGN_SHA256_ARM64=$(github_asset_digest "sigstore/cosign" "v${COSIGN_VERSION}" "${COSIGN_ASSET_ARM64}")
+
+# ------------------------------------------------------------------------------
+# NEW: frontend_tooling (turbo, playwright, sharp, lighthouse)
+#
+# Backs the `frontend`/`frontend-e2e` Dockerfile targets (ADR-0001,
+# nabhold/shared) — all npm-sourced, resolved the same way as pnpm above.
+# None of these have a compiled per-architecture GitHub release binary the
+# way ripgrep/task/uv/gh/cosign do; npm's own install-time integrity
+# checking is the verification mechanism, same reasoning already applied
+# to pnpm/Poetry.
+# ------------------------------------------------------------------------------
+
+TURBO_VERSION=$(resolve_npm '.frontend_tooling.turbo.version' 'turbo')
+
+PLAYWRIGHT_VERSION=$(resolve_npm '.frontend_tooling.playwright.version' 'playwright')
+
+SHARP_VERSION=$(resolve_npm '.frontend_tooling.sharp.version' 'sharp')
+
+LIGHTHOUSE_VERSION=$(resolve_npm '.frontend_tooling.lighthouse.version' 'lighthouse')
+
 # Derived, not resolved from an external source: the minor version (e.g.
 # "3.14" from "3.14.6") selects the python<MINOR> binary name and feeds
 # .python-version below. Computed once, here, so both versions.lock and
@@ -292,7 +415,20 @@ export FLUTTER_SHA256=${FLUTTER_SHA256}
 
 export POSTGRES_MAJOR=${POSTGRES_MAJOR}
 
+export PNPM_VERSION=${PNPM_VERSION}
+export POETRY_VERSION=${POETRY_VERSION}
+
+export UV_VERSION=${UV_VERSION}
+export UV_ASSET_AMD64=${UV_ASSET_AMD64}
+export UV_SHA256_AMD64=${UV_SHA256_AMD64}
+export UV_ASSET_ARM64=${UV_ASSET_ARM64}
+export UV_SHA256_ARM64=${UV_SHA256_ARM64}
+
 export TASK_VERSION=${TASK_VERSION}
+export TASK_ASSET_AMD64=${TASK_ASSET_AMD64}
+export TASK_SHA256_AMD64=${TASK_SHA256_AMD64}
+export TASK_ASSET_ARM64=${TASK_ASSET_ARM64}
+export TASK_SHA256_ARM64=${TASK_SHA256_ARM64}
 
 export RIPGREP_VERSION=${RIPGREP_VERSION}
 export RIPGREP_ASSET_AMD64=${RIPGREP_ASSET_AMD64}
@@ -321,8 +457,21 @@ export EZA_SHA256_ARM64=${EZA_SHA256_ARM64}
 export YQ_VERSION=${YQ_VERSION}
 
 export GH_VERSION=${GH_VERSION}
+export GH_ASSET_AMD64=${GH_ASSET_AMD64}
+export GH_SHA256_AMD64=${GH_SHA256_AMD64}
+export GH_ASSET_ARM64=${GH_ASSET_ARM64}
+export GH_SHA256_ARM64=${GH_SHA256_ARM64}
 
 export COSIGN_VERSION=${COSIGN_VERSION}
+export COSIGN_ASSET_AMD64=${COSIGN_ASSET_AMD64}
+export COSIGN_SHA256_AMD64=${COSIGN_SHA256_AMD64}
+export COSIGN_ASSET_ARM64=${COSIGN_ASSET_ARM64}
+export COSIGN_SHA256_ARM64=${COSIGN_SHA256_ARM64}
+
+export TURBO_VERSION=${TURBO_VERSION}
+export PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}
+export SHARP_VERSION=${SHARP_VERSION}
+export LIGHTHOUSE_VERSION=${LIGHTHOUSE_VERSION}
 
 EOF
 
