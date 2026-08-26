@@ -16,10 +16,12 @@ set -euo pipefail
 ###############################################################################
 
 QUIET=0
+CONTRACT=0
 
 for arg in "$@"; do
     case "$arg" in
         --quiet) QUIET=1 ;;
+        --contract) CONTRACT=1 ;;
     esac
 done
 
@@ -172,6 +174,76 @@ check_optional() {
     else
         warnc "$label — '$version_cmd' failed (exit ${rc})${stderr_out:+: ${stderr_out}}"
     fi
+}
+
+# check_contract: validates the calling repo's own .nabhold/environment.yaml
+# (if one exists) against this image's config/capabilities.yaml, per the
+# Development Environment Contract (nabhold/shared, ADR-0001).
+#
+# Deliberately opt-in and non-blocking as of v1.1.0 — see the design notes
+# in baobab-dev-v1_1_0-release-plan-amended.md §2 for why this stays a soft
+# check rather than a hard-fail path for now.
+#
+#   - No contract file present  -> informational message only, no PASS/FAIL
+#     impact. This MUST be the behavior for every current baobab-style
+#     checkout that hasn't adopted the contract yet.
+#   - yq missing, or this image's own capabilities.yaml missing -> warnc(),
+#     not bad(): a missing prerequisite for RUNNING the check is not the
+#     same thing as a confirmed incompatibility.
+#   - Contract present and parseable -> each required_capability (a
+#     domain-qualified dotted path, e.g. "languages.node") is looked up
+#     directly against capabilities.<profile>.* in this image's own
+#     capabilities.yaml.
+check_contract() {
+
+    section "Development Environment Contract"
+
+    local contract_file=".nabhold/environment.yaml"
+
+    if [[ ! -f "$contract_file" ]]; then
+        say "  No environment contract found (${contract_file}) — skipping compatibility check."
+        return
+    fi
+
+    if ! command -v yq >/dev/null 2>&1; then
+        warnc "yq not found — cannot parse ${contract_file}, skipping contract check"
+        return
+    fi
+
+    if [[ -z "${CONFIG_DIR:-}" || ! -f "${CONFIG_DIR}/capabilities.yaml" ]]; then
+        warnc "baobab-dev capabilities.yaml not found — cannot validate contract, skipping"
+        return
+    fi
+
+    local capabilities_file="${CONFIG_DIR}/capabilities.yaml"
+
+    local profile
+    profile="$(yq -r '.environment.profile // ""' "$contract_file")"
+
+    if [[ -z "$profile" ]]; then
+        bad "Contract ${contract_file} does not declare environment.profile"
+        return
+    fi
+
+    if [[ "$(yq -r ".capabilities | has(\"${profile}\")" "$capabilities_file")" != "true" ]]; then
+        bad "Contract declares unknown profile '${profile}' — baobab-dev capabilities.yaml has no such profile"
+        return
+    fi
+
+    say "  Declared profile: ${profile}"
+
+    local cap cap_value
+    while IFS= read -r cap; do
+        [[ -z "$cap" ]] && continue
+
+        cap_value="$(yq -r ".capabilities.${profile}.${cap} // \"MISSING\"" "$capabilities_file" 2>/dev/null || echo "MISSING")"
+
+        if [[ "$cap_value" == "MISSING" || "$cap_value" == "null" ]]; then
+            bad "Contract requires '${cap}' — not provided by baobab-dev profile '${profile}'"
+        else
+            ok "Contract requirement '${cap}' satisfied (${cap_value})"
+        fi
+    done < <(yq -r '.validation.required_capabilities[]' "$contract_file")
 }
 
 ###############################################################################
@@ -346,6 +418,14 @@ section "User"
 sudo -n true >/dev/null 2>&1 \
     && ok "Passwordless sudo" \
     || bad "Passwordless sudo unavailable"
+
+###############################################################################
+# Development Environment Contract (opt-in — see check_contract() above)
+###############################################################################
+
+if [[ "$CONTRACT" -eq 1 ]]; then
+    check_contract
+fi
 
 ###############################################################################
 # Summary

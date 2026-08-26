@@ -1,0 +1,101 @@
+# ==============================================================================
+# BAOBAB-DEV
+# Capability Self-Declaration
+#
+# Target path: nabhold/baobab-dev/config/capabilities.yaml
+#
+# Purpose
+# -------
+# baobab-dev declares what it ACTUALLY provides, per profile, so CI can
+# validate a consuming repo's `.nabhold/environment.yaml` against something
+# concrete instead of trusting versions.lock's shape to match the contract
+# schema's shape by convention alone.
+#
+# This concept is carried over from the pre-existing v1.1.0 release plan
+# (originally specified against a JSON Schema contract) as a genuine
+# enhancement — adapted here to the YAML/profile-based contract schema
+# actually implemented this session (see ADR-0001, and the decision to keep
+# the as-built contract rather than the plan's original JSON Schema shape).
+#
+# Relationship to other files
+# -----------------------------
+#   config/versions.yaml / versions.lock  -> exact resolved versions (source
+#                                             of truth for WHAT is installed)
+#   this file                              -> WHICH profile each capability
+#                                             belongs to, in the shape the
+#                                             contract schema expects
+#   shared/contracts/development-environment/schema.yaml
+#                                           -> defines what this file's
+#                                             structure must conform to
+#
+# This file should eventually be GENERATED from versions.yaml plus the
+# `stage:` field added to versions.yaml's frontend_tooling domain, rather
+# than hand-maintained as a second source of truth that can drift from it.
+# Hand-authored for now — generation is a follow-up task, not blocking this
+# release.
+#
+# Governing decision record: ADR-0001 (nabhold/shared/docs/adr/)
+# ==============================================================================
+
+schema:
+  name: "nabhold-development-environment-contract"
+  version: "1.0"
+
+provider:
+  name: "baobab-dev"
+  # image_tag intentionally omitted here — it's set at publish time by CI,
+  # not hand-maintained in this file (would immediately go stale otherwise).
+
+capabilities:
+
+  full:
+    languages:
+      python: "3.14"
+      node: "24"
+      flutter: "stable"
+    database:
+      postgresql: "17"
+    package_managers:
+      uv: true
+      poetry: true
+      pnpm: true
+    development:
+      docker: true
+      github_cli: true
+    security:
+      cosign: true
+
+  frontend:
+    languages:
+      node: "24"
+    package_managers:
+      pnpm: true
+    development:
+      github_cli: true
+    frontend_tooling:
+      turbo: true
+
+  frontend-e2e:
+    extends: "frontend"
+    frontend_tooling:
+      playwright: true
+      sharp: true
+      lighthouse: true
+
+# ------------------------------------------------------------------------------
+# Notes
+# ------------------------------------------------------------------------------
+
+notes:
+  - >
+    This is a hand-authored snapshot at the time of writing. It MUST be kept
+    in sync with versions.yaml manually until a generation step exists. A CI
+    check that fails when this file's declared capabilities don't match
+    versions.yaml's actual domains would close that gap — recommended as a
+    near-term follow-up, not implemented here.
+  - >
+    `full` deliberately omits `utilities` (task/ripgrep/fd/bat/eza/jq/yq/
+    fzf/tree/unzip/zip/xz) as individually-tracked capabilities, matching
+    the precedent already set in baobab's own environment.yaml declaration:
+    these are low version-sensitivity convenience tools, not build-breaking
+    dependencies, and don't need per-tool compatibility gating.
