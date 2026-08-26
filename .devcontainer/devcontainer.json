@@ -63,7 +63,9 @@
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "moby": false,
       "dockerDashComposeVersion": "v2"
-    }
+    },
+    "ghcr.io/devcontainers/features/python:1": {},
+    "ghcr.io/astral-sh/devcontainer-features/uv:1": {}
     // github-cli intentionally NOT declared here: `gh` ships in the image
     // via apt already; re-declaring would add provisioning time and risk
     // an unpinned `gh` version diverging from config/versions.lock.
