@@ -317,12 +317,14 @@ jobs:
       #   sbom: true          — SPDX Software Bill of Materials
       #   provenance: true    — SLSA Level 3 build provenance, embedded
       #   push-by-digest      — pushes layers without touching tags yet
-      #   push: only true for the `final` target on a tag push (see PUBLISH
-      #     TRIGGER POLICY above, and the TIER 1/TIER 2 note on this job) —
-      #     `frontend`/`frontend-e2e` never push in this job yet, even on a
-      #     tag push; PR/`main` runs exercise the identical build with push
-      #     disabled regardless of target, so a build failure surfaces
-      #     before a tag is ever cut.
+      #   push: true for every target on a tag push. Simplified from an
+      #     earlier target-restricted form (final/frontend only, added
+      #     during Tier 2's staged rollout) now that frontend-e2e has
+      #     completed its own Tier 2 pass too — all three targets publish
+      #     identically as of this release
+      #     (baobab-dev-v1_1_0-release-plan-amended.md). PR/`main` runs
+      #     exercise the identical build with push disabled regardless of
+      #     target, so a build failure surfaces before a tag is ever cut.
       - name: Build container image with SBOM & SLSA Provenance
         id: build
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
@@ -336,7 +338,7 @@ jobs:
             REVISION=${{ github.sha }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ matrix.target == 'final' && startsWith(github.ref, 'refs/tags/') }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ startsWith(github.ref, 'refs/tags/') }}
           cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ matrix.platform }}
           sbom: true
@@ -344,10 +346,8 @@ jobs:
           provenance: mode=max,version=v1
 
       # DEBUG: confirms BuildKit generated provenance at build time, before any merge step touches it.
-      # `final`-only: frontend/frontend-e2e never push in this job yet, so
-      # steps.build.outputs.digest resolves to nothing pullable for them.
       - name: Debug — inspect provenance immediately after build
-        if: matrix.target == 'final' && startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           echo "::group::buildx version (build job)"
           docker buildx version
@@ -362,24 +362,22 @@ jobs:
       # (Docker's documented "distribute build across runners" pattern).
       # Matrix job `outputs:` don't reliably survive across legs — depending
       # on completion order, `needs.build.outputs.*` can silently drop one
-      # architecture. Tag-gated AND final-only: nothing was pushed by
-      # digest for any other target/trigger combination, so there's
-      # nothing to export. The digest artifact naming below is unchanged
-      # (still platform-only, no target suffix) because only `final` ever
-      # reaches this step — no collision risk from the two new targets is
-      # introduced by Tier 1.
+      # architecture. Artifact naming below includes matrix.target — with
+      # all three targets now producing digests, the original
+      # platform-only naming (`digests-amd64`/`digests-arm64`) would
+      # collide between all of them.
       - name: Export architecture image digest
-        if: matrix.target == 'final' && startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           mkdir -p "${{ runner.temp }}/digests"
           digest="${{ steps.build.outputs.digest }}"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: matrix.target == 'final' && startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: digests-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
+          name: digests-${{ matrix.target }}-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -529,15 +527,16 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
             baobab-verify
 
-      # Container Smoke Test (frontend / frontend-e2e — Tier 1 addition)
-      # Neither target is pushed anywhere in this job yet (Tier 2 concern),
-      # so there's no registry digest to pull — this runs against the
-      # already-`load: true`-ed local `baobab-dev:scan` image instead,
-      # meaning it needs no tag gating and no registry auth. Not part of
-      # the original ask, but a natural, low-risk complement to Trivy
-      # scanning: it validates FUNCTIONAL correctness of the new stages
-      # (BAOBAB_BUILD_PROFILE gating actually works, right tools present),
-      # not just CVE absence — on every PR/push, not just at publish time.
+      # Container Smoke Test (frontend / frontend-e2e — local scan image)
+      # Runs against the already-`load: true`-ed local `baobab-dev:scan`
+      # image rather than the registry digest, so it needs no tag gating
+      # and no registry auth — cheap enough to run on every PR/push, not
+      # just at publish time. `final` gets an additional registry-digest
+      # smoke test above since that path already existed; frontend and
+      # frontend-e2e now also push for real (Tier 2) but don't yet have an
+      # equivalent registry-digest smoke test of their own — this local
+      # check still validates FUNCTIONAL correctness (BAOBAB_BUILD_PROFILE
+      # gating, right tools present), just not the exact bytes GHCR served.
       - name: Execute container smoke test (frontend / frontend-e2e)
         if: matrix.target != 'final' && matrix.platform == 'linux/amd64'
         run: |
@@ -548,17 +547,37 @@ jobs:
   # Cosign signatures/attestations via OIDC, and creates a GitHub Release.
   # Gated to `v*.*.*` tag pushes only (see PUBLISH TRIGGER POLICY above).
   publish:
-    name: Publish Multi-Arch Manifest & Cosign Sign
+    name: "Publish Multi-Arch Manifest & Cosign Sign (${{ matrix.target }})"
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
 
     runs-on: ubuntu-24.04
 
-    # contents: write — create the GitHub Release. packages: write —
-    # publish the multi-arch OCI index. id-token: write — CRITICAL for
-    # keyless Cosign signing via GitHub OIDC.
+    # TIER 2 (baobab-dev-v1_1_0-release-plan-amended.md; ADR-0001): matrix
+    # over target instead of a single final-only run. All three targets
+    # publish now — final+frontend proved this split on tag v1.1.0;
+    # frontend-e2e completes it in this pass. GitHub Release creation was
+    # REMOVED from this job entirely and moved to a new `release` job
+    # below: with matrix legs running in parallel, each independently
+    # creating/publishing "the" release for this tag would race — multiple
+    # legs concurrently calling `gh release edit --draft=false` on the same
+    # tag is a real correctness bug, not a style concern. This job now only
+    # publishes its own target's image and exports what the `release` job
+    # needs to build one combined release afterward.
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - final
+          - frontend
+          - frontend-e2e
+
+    # contents: write REMOVED — this job no longer creates the GitHub
+    # Release (see note above). packages: write — publish the multi-arch
+    # OCI index. id-token: write — CRITICAL for keyless Cosign signing via
+    # GitHub OIDC.
     permissions:
-      contents: write
+      contents: read
       packages: write
       id-token: write
 
@@ -590,26 +609,39 @@ jobs:
       - name: Setup Docker Buildx Engine
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
+      # `flavor: suffix=...` is empty for `final` (unsuffixed tags, exactly
+      # today's behavior) and `-<target>` for every other target — e.g.
+      # `frontend-e2e` produces v1.1.0-frontend-e2e, v1.1-frontend-e2e,
+      # v1-frontend-e2e, latest-frontend-e2e alongside final's unsuffixed
+      # and frontend's `-frontend` equivalents. Verified against
+      # docker/metadata-action's own issue tracker: `flavor.suffix` DOES
+      # apply to this explicit `type=raw,value=latest` rule (the `onlatest`
+      # attribute only concerns metadata-action's separate *implicit*
+      # auto-latest tag, which this workflow doesn't use) — confirmed
+      # before relying on it, not assumed.
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            suffix=${{ matrix.target == 'final' && '' || format('-{0}', matrix.target) }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
 
-      # Download per-architecture digests exported by the build job.
-      # merge-multiple: true flattens both digests-* artifacts into one dir,
-      # so each filename in ${{ runner.temp }}/digests IS one arch's raw
-      # sha256 (see "Export architecture image digest" in the build job).
+      # Download per-architecture digests exported by the build job — only
+      # THIS target's digests. Pattern includes matrix.target: without it,
+      # this would pull every other target's digests into the same merge,
+      # producing a manifest that mixed layers from different Dockerfile
+      # stages under one tag.
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-${{ matrix.target }}-*
           merge-multiple: true
 
       # Merge per-architecture digests into a unified multi-arch OCI index.
@@ -1157,84 +1189,49 @@ jobs:
       # support) — see that step's comment. If this fails with something
       # that reads like "no matching signatures/attestations found" rather
       # than a cryptographic/identity mismatch, start there.
-      - name: Verify published image signature & attestations
-        run: |
-          chmod +x scripts/verify-image.sh
-          ./scripts/verify-image.sh "${REGISTRY}/${IMAGE_NAME}@${{ steps.create-manifest.outputs.digest }}"
-
       # ------------------------------------------------------------------------
-      # Create GitHub Release with Verification Instructions
+      # Export this target's published info for the `release` job
       # ------------------------------------------------------------------------
-      # UPDATED (2026-08-23): split into create-as-draft + publish. A plain
-      # (non-draft) release create + asset-upload in one step failed with
-      # "Cannot upload assets to an immutable release" — this org/repo has
-      # GitHub's Immutable Releases enabled (a good thing: it locks the tag
-      # and assets after publish and auto-generates a cryptographically
-      # verifiable release attestation, matching this pipeline's own
-      # zero-trust goals). Immutability applies from the moment a release is
-      # published, not from creation — so per GitHub's own documented
-      # sequence (docs: "Immutable releases" > "Best practices for
-      # publishing immutable releases"): create as a DRAFT (drafts are
-      # exempt from immutability, so assets can still attach), then publish
-      # only after the asset is safely attached. Nothing about the release
-      # content changes — this only reorders when it goes non-draft.
-      - name: Create GitHub Release (draft)
-        id: create-release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
-        with:
-          draft: true
-          files: config/versions.lock
-          generate_release_notes: true
-          body: |
-            ### Container Pull Directive
-
-            ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ```
-
-            ### Cryptographic Verification Instructions
-
-            ```bash
-            # Verify Keyless Signature
-            cosign verify \
-              --certificate-identity-regexp "^https://github.com/${{ github.repository_owner }}" \
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
-
-            # Verify SLSA Provenance Attestation
-            cosign verify-attestation \
-              --type slsaprovenance1 \
-              --certificate-identity-regexp "^https://github.com/${{ github.repository_owner }}" \
-              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.create-manifest.outputs.digest }}
-            ```
-
-      # Publishes the draft created above — the moment this runs is when the
-      # release (tag + assets) actually becomes immutable. `gh release edit`
-      # is used rather than a second action: it's already on every
-      # GitHub-hosted runner, and this is a one-line operation not worth a
-      # third-party action dependency for. Runs under the same GITHUB_TOKEN
-      # already scoped `contents: write` at the job level — no new
-      # permission needed.
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # GitHub Release creation was REMOVED from this job (TIER 2 — see the
+      # job-level comment above for why: parallel matrix legs racing to
+      # create/publish the same release is a real correctness bug). Each
+      # leg instead writes its own primary tag + digest to a small file,
+      # uploaded as its own artifact, which the `release` job downloads
+      # from every leg to build ONE combined release afterward. Job
+      # `outputs:` were deliberately not used here — this file already
+      # relies on the artifact-file pattern (not matrix outputs) for
+      # exactly this "combine results from parallel legs" problem, see the
+      # `build` job's digest-export comment for the same reasoning.
+      - name: Export published info for release job
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIRST_TAG: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
         run: |
           set -euo pipefail
-          gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+          mkdir -p "${{ runner.temp }}/published-info"
+          cat > "${{ runner.temp }}/published-info/${{ matrix.target }}.json" <<JSON
+          {
+            "target": "${{ matrix.target }}",
+            "tag": "${FIRST_TAG}",
+            "digest": "${{ steps.create-manifest.outputs.digest }}"
+          }
+          JSON
 
+      - name: Upload published info
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: published-info-${{ matrix.target }}
+          path: ${{ runner.temp }}/published-info/*.json
+          if-no-files-found: error
+          retention-days: 1
 
       # ------------------------------------------------------------------------
-      # Step Summary Output
+      # Step Summary Output (per-target — the release job's summary covers
+      # the combined release; this one is this matrix leg's own record)
       # ------------------------------------------------------------------------
       - name: Output Workflow Step Summary
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           {
-            echo "## BAOBAB Dev Container Published Successfully"
+            echo "## BAOBAB Dev Container Published Successfully (${{ matrix.target }})"
             echo ""
             echo "**OCI Image Reference:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`"
             echo "**Index Manifest Digest:** \`${{ steps.create-manifest.outputs.digest }}\`"
@@ -1247,4 +1244,116 @@ jobs:
             echo "- ✅ **Keyless Cosign Signature:** Signed via GitHub Actions OIDC identity"
             echo "- ✅ **Post-Publish Verification:** Signature and attestations independently re-verified against the published digest (scripts/verify-image.sh)"
           } >> "$GITHUB_STEP_SUMMARY"
-          
+
+  # Job 4: Combined GitHub Release
+  # Runs once, after every `publish` matrix leg has finished — creates ONE
+  # release for the tag, listing pull + verification commands for every
+  # target that was published this run (final, frontend, frontend-e2e as
+  # of this pass). Reads whatever published-info-* artifacts exist — no
+  # hardcoded target list, so a future fourth target needs no change here.
+  release:
+    name: Create Combined GitHub Release
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    runs-on: ubuntu-24.04
+
+    # contents: write — create the GitHub Release. This is the only job
+    # that needs it now; `publish`'s matrix legs no longer touch releases.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Needed so the release can attach versions.lock as a release asset,
+      # same as the old single-job version did.
+      - name: Download resolved lockfile
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: resolved-lockfile
+          path: .
+
+      # Pulls every target's published-info-*.json into one directory —
+      # however many `publish` matrix legs actually ran and reached their
+      # export step (final, frontend, frontend-e2e as of this pass).
+      - name: Download published info from all targets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/published-info
+          pattern: published-info-*
+          merge-multiple: true
+
+      # Builds the release body from whatever published-info JSON files are
+      # actually present — genuinely no hardcoded target list, so this
+      # doesn't need editing when a future target joins. `final` renders
+      # first if present (its pull command has no suffix, matching the
+      # primary/default image), everything else in whatever order `find`
+      # returns.
+      - name: Build combined release body
+        id: release-body
+        run: |
+          set -euo pipefail
+          BODY_FILE="${{ runner.temp }}/release-body.md"
+          INFO_DIR="${{ runner.temp }}/published-info"
+
+          ordered_files=()
+          [[ -f "${INFO_DIR}/final.json" ]] && ordered_files+=("${INFO_DIR}/final.json")
+          for f in "${INFO_DIR}"/*.json; do
+            [[ "$f" == "${INFO_DIR}/final.json" ]] && continue
+            ordered_files+=("$f")
+          done
+
+          {
+            echo "### Container Pull Directives"
+            echo ""
+
+            for f in "${ordered_files[@]}"; do
+              target=$(jq -r '.target' "$f")
+              tag=$(jq -r '.tag' "$f")
+              digest=$(jq -r '.digest' "$f")
+
+              echo "**${target}:**"
+              echo '```bash'
+              echo "docker pull ${tag}"
+              echo '```'
+              echo ""
+              echo "Verify (digest \`${digest}\`):"
+              echo '```bash'
+              echo "cosign verify \\"
+              echo "  --certificate-identity-regexp \"^https://github.com/${{ github.repository_owner }}\" \\"
+              echo "  --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" \\"
+              echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${digest}"
+              echo ""
+              echo "cosign verify-attestation \\"
+              echo "  --type slsaprovenance1 \\"
+              echo "  --certificate-identity-regexp \"^https://github.com/${{ github.repository_owner }}\" \\"
+              echo "  --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" \\"
+              echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${digest}"
+              echo '```'
+              echo ""
+            done
+          } > "${BODY_FILE}"
+
+          echo "path=${BODY_FILE}" >> "$GITHUB_OUTPUT"
+
+      # Same immutable-releases sequencing as before (create as draft, then
+      # publish) — see the prior single-job version's comment for the full
+      # "Cannot upload assets to an immutable release" background; that
+      # constraint is unchanged by this job split.
+      - name: Create GitHub Release (draft)
+        id: create-release
+        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
+        with:
+          draft: true
+          files: config/versions.lock
+          generate_release_notes: true
+          body_path: ${{ steps.release-body.outputs.path }}
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
