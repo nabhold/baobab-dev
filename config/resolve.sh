@@ -232,21 +232,19 @@ FLUTTER_SHA256=$(flutter_sha256_for_version "${FLUTTER_VERSION}")
 # this is a genuine unbound-variable failure waiting to happen the next time
 # this resolver actually runs in CI, not a hypothetical.
 #
-# pnpm: source: npm in versions.yaml — resolved via the npm registry.
-# Poetry: source: github in versions.yaml — version discovery happens
-#   against python-poetry/poetry's tags even though the actual install is a
-#   pipx/PyPI install, not a GitHub binary download; no asset/checksum
-#   pair needed, pip's own install-time SRI hash verification covers it.
-# uv: source: github — a real compiled binary per architecture, needs the
-#   same asset+checksum treatment as ripgrep/fd/bat/eza below, not just a
-#   bare version string.
+# pnpm: source: npm in versions.yaml — resolved via the npm registry, via
+#   resolve_npm() above, which is already defined by this point in the file.
+#
+# Poetry and uv both resolve via resolve_github(), which is NOT defined
+# until the "GitHub tools" section below — so those two are resolved
+# further down in this file (immediately after that function's definition,
+# alongside TASK_VERSION/RIPGREP_VERSION/etc.), not here. Splitting them
+# was a real bug in an earlier version of this fix: PNPM_VERSION uses a
+# different helper (resolve_npm, defined above) and has no such ordering
+# constraint, so it stays here; POETRY_VERSION/UV_VERSION do not.
 # ------------------------------------------------------------------------------
 
 PNPM_VERSION=$(resolve_npm '.package_managers.pnpm.version' 'pnpm')
-
-POETRY_VERSION=$(resolve_github '.package_managers.poetry.version' 'python-poetry/poetry')
-
-UV_VERSION=$(resolve_github '.package_managers.uv.version' 'astral-sh/uv')
 
 # ------------------------------------------------------------------------------
 # GitHub tools
@@ -268,6 +266,22 @@ resolve_github() {
         printf "%s" "$version"
     fi
 }
+
+# POETRY_VERSION / UV_VERSION — moved here deliberately, not left where
+# PNPM_VERSION is defined above. Both call resolve_github(), which only
+# exists from this point in the file onward; calling it earlier is exactly
+# the "resolve_github: command not found" failure this fix corrects.
+#
+# Poetry: source: github in versions.yaml — version discovery happens
+#   against python-poetry/poetry's tags even though the actual install is a
+#   pipx/PyPI install, not a GitHub binary download; no asset/checksum
+#   pair needed, pip's own install-time SRI hash verification covers it.
+# uv: source: github — a real compiled binary per architecture, needs the
+#   same asset+checksum treatment as ripgrep/fd/bat/eza below, not just a
+#   bare version string (see the checksum block further down).
+POETRY_VERSION=$(resolve_github '.package_managers.poetry.version' 'python-poetry/poetry')
+
+UV_VERSION=$(resolve_github '.package_managers.uv.version' 'astral-sh/uv')
 
 TASK_VERSION=$(resolve_github '.utilities.task.version' 'go-task/task')
 
