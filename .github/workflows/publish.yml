@@ -1247,3 +1247,4 @@ jobs:
             echo "- ✅ **Keyless Cosign Signature:** Signed via GitHub Actions OIDC identity"
             echo "- ✅ **Post-Publish Verification:** Signature and attestations independently re-verified against the published digest (scripts/verify-image.sh)"
           } >> "$GITHUB_STEP_SUMMARY"
+          
