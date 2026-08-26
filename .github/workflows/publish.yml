@@ -135,7 +135,7 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -180,7 +180,7 @@ jobs:
       - name: Auto-commit resolved lockfile changes (branches only)
         id: auto-commit
         if: steps.drift-check.outputs.drift == 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        uses: stefanzweifel/git-auto-commit-action@8756aa072ef5b4a080af5dc8fef36c5d586e521d # v5.0.0
         with:
           commit_message: "chore(deps): auto-update versions.lock and .python-version via resolve.sh [skip ci]"
           file_pattern: "config/versions.lock .python-version"
@@ -234,7 +234,7 @@ jobs:
   # SLSA provenance embedded) and smoke-test it (see "PUBLISH TRIGGER
   # POLICY" above).
   build:
-    name: Build & Security Scan (${{ matrix.platform }})
+    name: "Build & Security Scan (${{ matrix.target }}, ${{ matrix.platform }})"
     needs: sanity-check
 
     # RATIONALE: Route arm64 builds to native ARM GitHub-hosted runners for faster performance.
@@ -242,14 +242,31 @@ jobs:
 
     # `packages: write` — needed to push image layers/metadata by digest.
     # Granted job-wide (GitHub Actions has no per-step scoping); only
-    # exercised on tag pushes.
+    # exercised on tag pushes, and only for the `final` target (see
+    # TIER 1/TIER 2 note below) — frontend/frontend-e2e never push in
+    # this job yet.
     permissions:
       contents: read
       packages: write
 
+    # TIER 1 (baobab-dev-v1_1_0-release-plan-amended.md tasks 1.9/1.10;
+    # ADR-0001): build and Trivy-scan all three Dockerfile targets on every
+    # trigger, exactly as `final` already was. Publishing (real GHCR tags,
+    # cosign signing, SLSA provenance, SBOM attestation, Rekor) stays
+    # `final`-only for now — extending that machinery to the two new
+    # targets is TIER 2, deliberately deferred until Tier 1 has proven both
+    # new stages build cleanly and shown their real Trivy/SBOM profile.
+    # This DOES triple this job's CI minutes on every PR/push (3 targets ×
+    # 2 platforms instead of 1 × 2) — an accepted, disclosed cost of
+    # validating both new stages continuously rather than only at publish
+    # time.
     strategy:
       fail-fast: false
       matrix:
+        target:
+          - final
+          - frontend
+          - frontend-e2e
         platform:
           - linux/amd64
           - linux/arm64
@@ -262,7 +279,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Overwrites whatever versions.lock the checkout brought in with the
       # exact one sanity-check resolved earlier in THIS run (see "Upload
@@ -277,14 +294,14 @@ jobs:
       # uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
 
       - name: Setup Docker Buildx Engine
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       # Only needed to PUSH — an unauthenticated build can still pull the
       # public base image and read the GHA cache, so PR/branch validation
       # builds (which never push) skip this login entirely.
       - name: Authenticate to GitHub Container Registry (GHCR)
         if: startsWith(github.ref, 'refs/tags/')
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -292,7 +309,7 @@ jobs:
       
       - name: Extract OCI Metadata & Labels
         id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
@@ -300,31 +317,37 @@ jobs:
       #   sbom: true          — SPDX Software Bill of Materials
       #   provenance: true    — SLSA Level 3 build provenance, embedded
       #   push-by-digest      — pushes layers without touching tags yet
-      #   push: only true on a tag push (see PUBLISH TRIGGER POLICY above);
-      #     PR/`main` runs exercise the identical build with push disabled,
-      #     so a build failure surfaces before a tag is ever cut.
+      #   push: only true for the `final` target on a tag push (see PUBLISH
+      #     TRIGGER POLICY above, and the TIER 1/TIER 2 note on this job) —
+      #     `frontend`/`frontend-e2e` never push in this job yet, even on a
+      #     tag push; PR/`main` runs exercise the identical build with push
+      #     disabled regardless of target, so a build failure surfaces
+      #     before a tag is ever cut.
       - name: Build container image with SBOM & SLSA Provenance
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           file: ./.devcontainer/docker/Dockerfile
+          target: ${{ matrix.target }}
           build-args: |
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             VERSION=${{ steps.meta.outputs.version }}
             REVISION=${{ github.sha }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ startsWith(github.ref, 'refs/tags/') }}
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ matrix.target == 'final' && startsWith(github.ref, 'refs/tags/') }}
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ matrix.platform }}
           sbom: true
           # Instruct BuildKit to emit SLSA v1.0 schema inside the in-toto predicate
           provenance: mode=max,version=v1
 
       # DEBUG: confirms BuildKit generated provenance at build time, before any merge step touches it.
+      # `final`-only: frontend/frontend-e2e never push in this job yet, so
+      # steps.build.outputs.digest resolves to nothing pullable for them.
       - name: Debug — inspect provenance immediately after build
-        if: startsWith(github.ref, 'refs/tags/')
+        if: matrix.target == 'final' && startsWith(github.ref, 'refs/tags/')
         run: |
           echo "::group::buildx version (build job)"
           docker buildx version
@@ -339,17 +362,21 @@ jobs:
       # (Docker's documented "distribute build across runners" pattern).
       # Matrix job `outputs:` don't reliably survive across legs — depending
       # on completion order, `needs.build.outputs.*` can silently drop one
-      # architecture. Tag-gated: nothing was pushed by digest on a PR/branch
-      # validation build, so there's nothing to export.
+      # architecture. Tag-gated AND final-only: nothing was pushed by
+      # digest for any other target/trigger combination, so there's
+      # nothing to export. The digest artifact naming below is unchanged
+      # (still platform-only, no target suffix) because only `final` ever
+      # reaches this step — no collision risk from the two new targets is
+      # introduced by Tier 1.
       - name: Export architecture image digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: matrix.target == 'final' && startsWith(github.ref, 'refs/tags/')
         run: |
           mkdir -p "${{ runner.temp }}/digests"
           digest="${{ steps.build.outputs.digest }}"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: matrix.target == 'final' && startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
@@ -362,14 +389,17 @@ jobs:
       # sbom/provenance) produces a 2-manifest OCI index Trivy can't resolve
       # directly. This re-exports the identical build — same builder/cache,
       # nothing rebuilt — with `load: true` and no attestations, purely as
-      # an unambiguous local scan target. Runs on EVERY trigger (not
-      # tag-gated) since it only feeds the equally un-gated Trivy step
-      # below; `load: true` never touches GHCR, so no registry auth needed.
+      # an unambiguous local scan target. Runs on EVERY trigger AND every
+      # target (not gated at all) — this is the whole point of Tier 1:
+      # frontend/frontend-e2e get the same continuous Trivy coverage `final`
+      # already had, even though they don't publish yet. `load: true` never
+      # touches GHCR, so no registry auth needed.
       - name: Build local single-manifest image for scanning
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           file: ./.devcontainer/docker/Dockerfile
+          target: ${{ matrix.target }}
           build-args: |
             BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             VERSION=${{ steps.meta.outputs.version }}
@@ -378,7 +408,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           load: true
           tags: baobab-dev:scan
-          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
 
       # Cache Trivy vulnerability database
       # Trivy re-downloads its ~500MB+ DB on every scan by default.
@@ -486,18 +516,32 @@ jobs:
             --format table \
             baobab-dev:scan
 
-      # Container Smoke Test
-      # Verifies basic runtime health before publishing. Still tag-gated
-      # (unlike Trivy above): `steps.build.outputs.digest` only resolves to
-      # something pullable once the real build's `push:` is true, i.e. on a
-      # tag push. Tests the actual to-be-published image, not the local
-      # `baobab-dev:scan` image Trivy scans.
-      - name: Execute container smoke test
-        if: matrix.platform == 'linux/amd64' && startsWith(github.ref, 'refs/tags/')
+      # Container Smoke Test (final — tests the actual to-be-published image)
+      # Still tag-gated and now also final-only: steps.build.outputs.digest
+      # only resolves to something pullable once the real build's `push:`
+      # is true, i.e. a tag push AND target == final. Tests the actual
+      # to-be-published image, not the local `baobab-dev:scan` image Trivy
+      # scans.
+      - name: Execute container smoke test (final)
+        if: matrix.target == 'final' && matrix.platform == 'linux/amd64' && startsWith(github.ref, 'refs/tags/')
         run: |
           docker run --rm \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
             baobab-verify
+
+      # Container Smoke Test (frontend / frontend-e2e — Tier 1 addition)
+      # Neither target is pushed anywhere in this job yet (Tier 2 concern),
+      # so there's no registry digest to pull — this runs against the
+      # already-`load: true`-ed local `baobab-dev:scan` image instead,
+      # meaning it needs no tag gating and no registry auth. Not part of
+      # the original ask, but a natural, low-risk complement to Trivy
+      # scanning: it validates FUNCTIONAL correctness of the new stages
+      # (BAOBAB_BUILD_PROFILE gating actually works, right tools present),
+      # not just CVE absence — on every PR/push, not just at publish time.
+      - name: Execute container smoke test (frontend / frontend-e2e)
+        if: matrix.target != 'final' && matrix.platform == 'linux/amd64'
+        run: |
+          docker run --rm baobab-dev:scan baobab-verify
 
   # Job 3: Manifest Creation, OIDC Cosign Signing & Release Attestation
   # Merges per-arch images into a multi-arch OCI index, applies keyless
@@ -520,7 +564,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Same reasoning as build's identical step: this job's checkout is
       # pinned to github.sha and can't see sanity-check's own-run commit.
@@ -532,7 +576,7 @@ jobs:
           path: .
 
       - name: Authenticate to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -544,11 +588,11 @@ jobs:
 
       # FIX: publish job previously had no Buildx setup, relying on the runner's older bundled buildx CLI for imagetools create/inspect — the likely cause of missing provenance in the merged index.
       - name: Setup Docker Buildx Engine
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       - name: Extract Docker tagging metadata
         id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -1137,7 +1181,7 @@ jobs:
       - name: Create GitHub Release (draft)
         id: create-release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
         with:
           draft: true
           files: config/versions.lock
