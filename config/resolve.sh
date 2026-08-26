@@ -161,6 +161,50 @@ flutter_sha256_for_version() {
         head -n1
 }
 
+# FIX: FLUTTER_GIT_REF and FLUTTER_ARCHIVE_AMD64 were never resolved at
+# all, despite the flutter-sdk Dockerfile stage depending on both
+# unconditionally — FLUTTER_GIT_REF for the arm64 git-clone path,
+# FLUTTER_ARCHIVE_AMD64 for the amd64 tarball download. This means the
+# flutter-sdk stage was broken on BOTH architectures, the same bug class
+# as the missing task/uv/gh/cosign/yq asset resolution, just undiscovered
+# until a build actually reached that stage.
+#
+# VERIFICATION STATUS — read before trusting this blindly:
+# `hash`, `sha256`, `version`, and `channel` are proven fields — the
+# functions using them (flutter_latest, flutter_sha256_for_version) are
+# already confirmed working against a real build. The `archive` field
+# below is Flutter's own documented public release-manifest field, not
+# invented for this fix, but storage.googleapis.com is not reachable from
+# this session's network egress policy, so — unlike every other fix in
+# this file — it could NOT be independently live-verified here. Confirm
+# with this exact command before merging:
+#   curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json \
+#     | yq -r '.releases[] | select(.version == "<FLUTTER_VERSION_HERE>" and .channel == "stable") | .archive'
+# If that prints nothing or an unexpected shape, this function needs
+# correcting before it's trusted the way the rest of this file now is.
+flutter_hash_for_version() {
+
+    local version="$1"
+
+    curl -fsSL \
+        "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json" |
+        yq -r ".releases[] | select(.version == \"${version}\" and .channel == \"stable\") | .hash" |
+        head -n1
+}
+
+flutter_archive_url_for_version() {
+
+    local version="$1"
+    local archive_path
+
+    archive_path=$(curl -fsSL \
+        "https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json" |
+        yq -r ".releases[] | select(.version == \"${version}\" and .channel == \"stable\") | .archive" |
+        head -n1)
+
+    printf "https://storage.googleapis.com/flutter_infra_release/releases/%s" "${archive_path}"
+}
+
 # npm-sourced tools (pnpm, turbo, playwright, sharp, lighthouse) have no
 # GitHub Releases API equivalent worth using here — they're versioned and
 # distributed via the npm registry itself, which publishes a canonical
@@ -220,6 +264,26 @@ FLUTTER_SHA256=$(flutter_sha256_for_version "${FLUTTER_VERSION}")
 
 [[ -n "$FLUTTER_SHA256" && "$FLUTTER_SHA256" != "null" ]] \
     || die "Flutter's release manifest has no sha256 for stable version ${FLUTTER_VERSION}."
+
+# The Dockerfile's flutter-sdk stage actually references FLUTTER_SHA256_AMD64
+# (arch-suffixed), not plain FLUTTER_SHA256 — Flutter's Linux release
+# manifest only ever describes the x64/amd64 archive in the first place (see
+# the Dockerfile's own comment: "Flutter's officially distributed pre-built
+# SDK bundle is x64-only"), so this is the exact same value, exported under
+# the second name the Dockerfile actually needs — not a second lookup.
+FLUTTER_SHA256_AMD64="${FLUTTER_SHA256}"
+
+info "Resolving Flutter git ref for arm64 (${FLUTTER_VERSION})..."
+FLUTTER_GIT_REF=$(flutter_hash_for_version "${FLUTTER_VERSION}")
+
+[[ -n "$FLUTTER_GIT_REF" && "$FLUTTER_GIT_REF" != "null" ]] \
+    || die "Flutter's release manifest has no hash for stable version ${FLUTTER_VERSION}."
+
+info "Resolving Flutter amd64 archive URL for ${FLUTTER_VERSION}..."
+FLUTTER_ARCHIVE_AMD64=$(flutter_archive_url_for_version "${FLUTTER_VERSION}")
+
+[[ -n "$FLUTTER_ARCHIVE_AMD64" && "$FLUTTER_ARCHIVE_AMD64" != "https://storage.googleapis.com/flutter_infra_release/releases/null" ]] \
+    || die "Flutter's release manifest has no archive path for stable version ${FLUTTER_VERSION}. See flutter_archive_url_for_version()'s verification note — the 'archive' field could not be live-verified in the environment this fix was written in."
 
 # ------------------------------------------------------------------------------
 # Package managers (pnpm, Poetry, uv)
@@ -376,6 +440,20 @@ COSIGN_SHA256_AMD64=$(github_asset_digest "sigstore/cosign" "v${COSIGN_VERSION}"
 COSIGN_ASSET_ARM64="cosign-linux-arm64"
 COSIGN_SHA256_ARM64=$(github_asset_digest "sigstore/cosign" "v${COSIGN_VERSION}" "${COSIGN_ASSET_ARM64}")
 
+# FIX: yq was missed in the earlier pass. It's fetched as a raw binary in
+# the same way cosign is (YQ_ASSET="YQ_ASSET_${ARCH_SUFFIX}" in the
+# Dockerfile's cli-tools stage) — YQ_VERSION alone was already being
+# resolved correctly (that part predates this fix and was never broken),
+# but YQ_ASSET_*/YQ_SHA256_* were never generated, which is exactly what
+# surfaced as "!YQ_ASSET: unbound variable" on a real build — after
+# ripgrep/fd/bat/eza/task/uv/gh had already succeeded, confirming this was
+# the one remaining gap, not a new regression.
+info "Fetching yq checksums..."
+YQ_ASSET_AMD64="yq_linux_amd64"
+YQ_SHA256_AMD64=$(github_asset_digest "mikefarah/yq" "v${YQ_VERSION}" "${YQ_ASSET_AMD64}")
+YQ_ASSET_ARM64="yq_linux_arm64"
+YQ_SHA256_ARM64=$(github_asset_digest "mikefarah/yq" "v${YQ_VERSION}" "${YQ_ASSET_ARM64}")
+
 # ------------------------------------------------------------------------------
 # NEW: frontend_tooling (turbo, playwright, sharp, lighthouse)
 #
@@ -426,6 +504,9 @@ export NODE_MAJOR=${NODE_MAJOR}
 
 export FLUTTER_VERSION=${FLUTTER_VERSION}
 export FLUTTER_SHA256=${FLUTTER_SHA256}
+export FLUTTER_SHA256_AMD64=${FLUTTER_SHA256_AMD64}
+export FLUTTER_GIT_REF=${FLUTTER_GIT_REF}
+export FLUTTER_ARCHIVE_AMD64=${FLUTTER_ARCHIVE_AMD64}
 
 export POSTGRES_MAJOR=${POSTGRES_MAJOR}
 
@@ -469,6 +550,10 @@ export EZA_ASSET_ARM64=${EZA_ASSET_ARM64}
 export EZA_SHA256_ARM64=${EZA_SHA256_ARM64}
 
 export YQ_VERSION=${YQ_VERSION}
+export YQ_ASSET_AMD64=${YQ_ASSET_AMD64}
+export YQ_SHA256_AMD64=${YQ_SHA256_AMD64}
+export YQ_ASSET_ARM64=${YQ_ASSET_ARM64}
+export YQ_SHA256_ARM64=${YQ_SHA256_ARM64}
 
 export GH_VERSION=${GH_VERSION}
 export GH_ASSET_AMD64=${GH_ASSET_AMD64}
