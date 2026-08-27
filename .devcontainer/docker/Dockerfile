@@ -504,12 +504,33 @@ FROM base AS with-node
 # package (`npm/cli`) has a well-documented, recurring history of its
 # *vendored* tar copy lagging behind tar's own patched releases by days to
 # weeks (see npm/cli#8715, #8917, #9824 — the same pattern each time).
-# Waiting on npm to re-bundle isn't necessary: force-upgrading tar inside
-# npm's own installed node_modules directly is a real fix, not a
-# suppression — it replaces the exact file Trivy flags. `npm install
-# tar@latest` (not `-g`) run from inside npm's own package directory
-# targets that nested copy specifically, leaving the global npm package
-# unaffected.
+#
+# ATTEMPTED AND REJECTED: `npm install tar@latest --no-save` run from
+# inside npm's own package directory. This does NOT do what it looks like
+# it does — npm's own directory has its own package.json (npm is itself a
+# monorepo with internal workspace packages like @npmcli/docs), so
+# `npm install` there re-resolves npm's ENTIRE declared dependency tree,
+# not just the one nested package we're trying to touch. That reinstall
+# fails outright, because npm's internal workspace packages aren't
+# independently resolvable from the public registry in isolation.
+# Confirmed by direct reproduction, not inferred from the CI log alone —
+# the actual failure was `npm error 404 ... @npmcli/docs`.
+#
+# ACTUAL FIX: bypass `npm install`'s dependency-resolution machinery
+# entirely and replace the vendored tar/ directory's contents directly
+# with a specific pinned release, verified against the registry's own
+# published SRI integrity hash before anything is extracted — the same
+# zero-trust principle applied to every other externally-fetched artifact
+# in this file, just via npm's own integrity metadata instead of a
+# separate checksums file. This is pinned to an exact version rather than
+# resolved as "latest" at build time: resolving latest here would
+# reintroduce the exact non-reproducible-build problem already fixed
+# elsewhere in this file for pnpm/Poetry/uv. Deliberately NOT yet routed
+# through config/versions.yaml + resolve.sh — this needs to work now, and
+# that would touch resolve.sh's already-large surface again on top of a
+# fix that's already gone through two failed rounds. Recommended follow-
+# up, not done here: promote TAR_OVERRIDE_VERSION into versions.yaml
+# alongside the other pinned tool versions, once this is confirmed green.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -524,7 +545,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g npm@latest && \
-    ( cd "$(npm root -g)/npm" && npm install tar@latest --no-save ) && \
+    TAR_OVERRIDE_VERSION="7.5.22" && \
+    TAR_OVERRIDE_INTEGRITY="sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==" && \
+    TAR_DIR="$(npm root -g)/npm/node_modules/tar" && \
+    curl -fsSL -o /tmp/tar-override.tgz \
+      "https://registry.npmjs.org/tar/-/tar-${TAR_OVERRIDE_VERSION}.tgz" && \
+    ACTUAL_INTEGRITY="sha512-$(openssl dgst -sha512 -binary /tmp/tar-override.tgz | base64 -w 0)" && \
+    if [ "${ACTUAL_INTEGRITY}" != "${TAR_OVERRIDE_INTEGRITY}" ]; then \
+      echo "tar@${TAR_OVERRIDE_VERSION} integrity mismatch — expected ${TAR_OVERRIDE_INTEGRITY}, got ${ACTUAL_INTEGRITY}" >&2; \
+      exit 1; \
+    fi && \
+    rm -rf "${TAR_DIR}" && \
+    mkdir -p "${TAR_DIR}" && \
+    tar -xzf /tmp/tar-override.tgz -C "${TAR_DIR}" --strip-components=1 && \
+    rm -f /tmp/tar-override.tgz && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
