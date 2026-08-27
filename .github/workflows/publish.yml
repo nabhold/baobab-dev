@@ -366,12 +366,44 @@ jobs:
       # all three targets now producing digests, the original
       # platform-only naming (`digests-amd64`/`digests-arm64`) would
       # collide between all of them.
+      #
+      # FIX (Option A): steps.build.outputs.digest is the INDEX digest
+      # BuildKit produced for this single-platform push — sbom/provenance
+      # being enabled means even a one-platform build pushes a 2-entry
+      # index (image manifest + attestation manifest), not a flat manifest.
+      # Exporting that index digest directly, then feeding it into
+      # `imagetools create` in the publish job, hits a documented buildx
+      # gap (docker/buildx#3433 — "individual image manifests... dropped
+      # their related attestation manifests" during imagetools create
+      # merges) that drops the attestation for at least one platform per
+      # merge — confirmed live: always linux/amd64, never linux/arm64,
+      # across three separate publish runs of the `frontend` target.
+      # Exporting the FLAT image-manifest digest instead (extracted here
+      # from within the pushed index) routes that later merge through
+      # buildx's referrers-API-based attestation rediscovery path, which is
+      # what #3433 actually fixed. If this doesn't resolve it, the fallback
+      # is Option B: hand-construct the merged index via crane instead of
+      # relying on `imagetools create`'s automatic behavior at all.
       - name: Export architecture image digest
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PUSHED_DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
+          set -euo pipefail
+          IMG="${REGISTRY}/${IMAGE_NAME}"
+          ARCH="${PLATFORM#linux/}"
+
+          FLAT_DIGEST=$(docker buildx imagetools inspect "${IMG}@${PUSHED_DIGEST}" --format '{{ json .Manifest }}' | \
+            jq -r --arg arch "${ARCH}" '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
+
+          if [[ -z "${FLAT_DIGEST}" || "${FLAT_DIGEST}" == "null" ]]; then
+            echo "::error:: Could not find a flat image manifest for ${PLATFORM} inside the pushed index ${IMG}@${PUSHED_DIGEST}."
+            exit 1
+          fi
+
           mkdir -p "${{ runner.temp }}/digests"
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          touch "${{ runner.temp }}/digests/${FLAT_DIGEST#sha256:}"
 
       - name: Upload digest
         if: startsWith(github.ref, 'refs/tags/')
