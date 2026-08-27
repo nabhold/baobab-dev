@@ -65,7 +65,7 @@ GHSA-hrxh-6v49-42gf exp:2026-11-10
 # traversal
 #
 # Found in: usr/local/bin/task, usr/local/bin/yq, usr/local/bin/cosign,
-#           usr/libexec/docker/cli-plugins/docker-compose
+# usr/libexec/docker/cli-plugins/docker-compose
 # Fixed in: Go stdlib 1.25.12, 1.26.5, or 1.27.0-rc.2
 #
 # This is the Go toolchain version each binary was COMPILED WITH, baked in
@@ -81,7 +81,7 @@ CVE-2026-39822 exp:2026-11-10
 # vulnerability
 #
 # Found in: usr/libexec/docker/cli-plugins/docker-buildx,
-#           usr/libexec/docker/cli-plugins/docker-compose
+# usr/libexec/docker/cli-plugins/docker-compose
 # Fixed in: github.com/docker/docker 29.3.1
 #
 # Confirmed by direct go.mod inspection (not just "no newer tag exists"):
@@ -190,10 +190,10 @@ CVE-2025-47273 exp:2026-11-10
 # of the tools below built against the patched toolchain — live-checked
 # every one's actual latest release against that 2026-08-13 date:
 #
-#   task    v3.52.0  released 2026-07-02  (yq   v4.53.3  released 2026-06-06)
-#   gh      v2.97.0  released 2026-07-31  (cosign v3.1.3 released 2026-08-06)
-#   buildx  v0.36.1  released 2026-08-04  (compose v5.4.0 released 2026-08-03)
-#   docker/cli latest tag v29.7.2 (via git ls-remote; no release predates the patch either)
+# task v3.52.0 released 2026-07-02 (yq v4.53.3 released 2026-06-06)
+# gh v2.97.0 released 2026-07-31 (cosign v3.1.3 released 2026-08-06)
+# buildx v0.36.1 released 2026-08-04 (compose v5.4.0 released 2026-08-03)
+# docker/cli latest tag v29.7.2 (via git ls-remote; no release predates the patch either)
 #
 # Every single one predates 2026-08-13 — none of them COULD contain the
 # fix yet, this is not a gap in our own checking. This is expected to
@@ -212,6 +212,20 @@ CVE-2025-47273 exp:2026-11-10
 # (usr/bin/pebble also carried these same findings — that one is handled
 # by removing the unused binary outright in the Dockerfile instead of an
 # ignore entry, since nothing in this image actually runs it.)
+#
+# ADDED 2026-08-27: CVE-2026-56864 and CVE-2026-56865 belong to this same
+# Go 1.26.6/1.25.13 security release (golang.org/x/mod transparency-log
+# tile-verification bypass) but were missed in the 2026-08-15 pass — a
+# live Trivy scan two days before this batch's own exp: date surfaced
+# them as active, unignored failures in gh, cosign, docker-buildx, and
+# docker-compose. Same root cause, same affected-binary subset, same
+# "fix exists upstream, no tagged release incorporates it yet" situation
+# as the seven above — confirmed specifically for gh (cli/cli's own repo
+# has merged "Bump Go to 1.26.6" but v2.98.0, current latest, predates
+# that merge per its own changelog). Given how close this already is to
+# the batch's exp: date, do not extend blindly on 2026-08-29 without
+# re-checking each of the nine CVEs in this batch individually — some may
+# have shipped fixes by then and some may not.
 # ==============================================================================
 CVE-2026-33818 exp:2026-08-29
 CVE-2026-39821 exp:2026-08-29
@@ -220,6 +234,9 @@ CVE-2026-56858 exp:2026-08-29
 CVE-2026-56859 exp:2026-08-29
 CVE-2026-56860 exp:2026-08-29
 CVE-2026-56862 exp:2026-08-29
+CVE-2026-56864 exp:2026-08-29
+CVE-2026-56865 exp:2026-08-29
+
 # ------------------------------------------------------------------------------
 # GHSA-6v7p-g79w-8964 — msgpack: Out-of-bounds read / crash on Unpacker reuse
 #

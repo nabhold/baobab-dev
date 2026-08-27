@@ -496,6 +496,20 @@ FROM base AS with-node
 # 59874 (tar) and CVE-2026-12151 (undici). Two brace-expansion CVEs and
 # one ip-address CVE remain genuinely unfixed even in npm's own latest
 # release — see .trivyignore for those, investigated the same way.
+#
+# FIX (2026-08-27): a SEPARATE, newly-disclosed tar CVE (CVE-2026-73566,
+# a stack-overflow DoS via crafted long-path tar archives) affects the
+# exact 7.5.19 bundled above — this postdates the 2026-08-13 investigation
+# and is a different CVE than the ones already resolved by it. npm's own
+# package (`npm/cli`) has a well-documented, recurring history of its
+# *vendored* tar copy lagging behind tar's own patched releases by days to
+# weeks (see npm/cli#8715, #8917, #9824 — the same pattern each time).
+# Waiting on npm to re-bundle isn't necessary: force-upgrading tar inside
+# npm's own installed node_modules directly is a real fix, not a
+# suppression — it replaces the exact file Trivy flags. `npm install
+# tar@latest` (not `-g`) run from inside npm's own package directory
+# targets that nested copy specifically, leaving the global npm package
+# unaffected.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -510,6 +524,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g npm@latest && \
+    ( cd "$(npm root -g)/npm" && npm install tar@latest --no-save ) && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
