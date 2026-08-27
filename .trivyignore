@@ -178,17 +178,17 @@ CVE-2025-47273 exp:2026-11-10
 # 2026-08-15 batch — Go 1.26.6 / 1.25.13 stdlib CVEs
 #
 # DIFFERENT SITUATION from every entry above, and deliberately given a
-# SHORTER exp: (2026-08-29, ~2 weeks) instead of the standing 2026-11-10
-# checkpoint. Every entry above is "stuck" — investigated and confirmed
-# there is genuinely nothing to upgrade to, for months at a stretch
-# (pip's own vendored setuptools hasn't moved across dozens of pip
-# releases; Moby's docker.io dependency is architecturally stuck until
-# Docker's own plugins move off v28). This batch is the opposite: Go
-# 1.26.6 and 1.25.13, released 2026-08-13 (two days before this
-# investigation), fixed all seven CVEs below in the standard library
-# itself. The fix EXISTS. What doesn't exist yet is a new release of any
-# of the tools below built against the patched toolchain — live-checked
-# every one's actual latest release against that 2026-08-13 date:
+# SHORTER exp: instead of the standing 2026-11-10 checkpoint. Every entry
+# above is "stuck" — investigated and confirmed there is genuinely nothing
+# to upgrade to, for months at a stretch (pip's own vendored setuptools
+# hasn't moved across dozens of pip releases; Moby's docker.io dependency
+# is architecturally stuck until Docker's own plugins move off v28). This
+# batch is the opposite: Go 1.26.6 and 1.25.13, released 2026-08-13 (two
+# days before this investigation), fixed all nine CVEs below in the
+# standard library itself. The fix EXISTS. What doesn't exist yet is a new
+# release of any of the tools below built against the patched toolchain —
+# live-checked every one's actual latest release against that 2026-08-13
+# date:
 #
 # task v3.52.0 released 2026-07-02 (yq v4.53.3 released 2026-06-06)
 # gh v2.97.0 released 2026-07-31 (cosign v3.1.3 released 2026-08-06)
@@ -196,14 +196,21 @@ CVE-2025-47273 exp:2026-11-10
 # docker/cli latest tag v29.7.2 (via git ls-remote; no release predates the patch either)
 #
 # Every single one predates 2026-08-13 — none of them COULD contain the
-# fix yet, this is not a gap in our own checking. This is expected to
-# resolve itself via ordinary upstream point releases within days to a
-# couple of weeks, well before the standing Nov checkpoint, so a shorter
-# window is the honest one: re-run this scan close to 2026-08-29, and
-# drop whichever of these seven have since been picked up by a fresh
-# task/yq/gh/cosign/buildx/compose/docker-cli release (config/resolve.sh's
-# own "latest" tracking should pull those in automatically on the next
-# lockfile update, no Dockerfile change needed for that part).
+# fix yet, this is not a gap in our own checking.
+#
+# EXPIRY UPDATED 2026-08-27, exp:2026-08-29 -> exp:2026-09-05: this was a
+# DATE ALIGNMENT with the separately-added CVE-2026-17106 (buildx)
+# checkpoint below, to consolidate two review passes into one — it is NOT
+# a re-verification that these nine still lack fixes. Nothing above was
+# re-checked as part of this change. Whoever does the Sept 5 review owes
+# this batch the same live-release check described above, not just the
+# buildx one: re-run this scan, and drop whichever of these nine have
+# since been picked up by a fresh task/yq/gh/cosign/buildx/compose/
+# docker-cli release (config/resolve.sh's own "latest" tracking should
+# pull those in automatically on the next lockfile update, no Dockerfile
+# change needed for that part). If any are still unfixed on Sept 5,
+# re-verify and extend deliberately — don't let a second silent push-
+# forward happen.
 #
 # Found in: usr/bin/docker, usr/libexec/docker/cli-plugins/docker-buildx,
 # usr/libexec/docker/cli-plugins/docker-compose, usr/local/bin/cosign,
@@ -220,22 +227,77 @@ CVE-2025-47273 exp:2026-11-10
 # them as active, unignored failures in gh, cosign, docker-buildx, and
 # docker-compose. Same root cause, same affected-binary subset, same
 # "fix exists upstream, no tagged release incorporates it yet" situation
-# as the seven above — confirmed specifically for gh (cli/cli's own repo
+# as the seven original entries above — confirmed specifically for gh (cli/cli's own repo
 # has merged "Bump Go to 1.26.6" but v2.98.0, current latest, predates
 # that merge per its own changelog). Given how close this already is to
 # the batch's exp: date, do not extend blindly on 2026-08-29 without
 # re-checking each of the nine CVEs in this batch individually — some may
 # have shipped fixes by then and some may not.
 # ==============================================================================
-CVE-2026-33818 exp:2026-08-29
-CVE-2026-39821 exp:2026-08-29
-CVE-2026-56853 exp:2026-08-29
-CVE-2026-56858 exp:2026-08-29
-CVE-2026-56859 exp:2026-08-29
-CVE-2026-56860 exp:2026-08-29
-CVE-2026-56862 exp:2026-08-29
-CVE-2026-56864 exp:2026-08-29
-CVE-2026-56865 exp:2026-08-29
+CVE-2026-33818 exp:2026-09-05
+CVE-2026-39821 exp:2026-09-05
+CVE-2026-56853 exp:2026-09-05
+CVE-2026-56858 exp:2026-09-05
+CVE-2026-56859 exp:2026-09-05
+CVE-2026-56860 exp:2026-09-05
+CVE-2026-56862 exp:2026-09-05
+CVE-2026-56864 exp:2026-09-05
+CVE-2026-56865 exp:2026-09-05
+
+# ------------------------------------------------------------------------------
+# CVE-2026-17106 (GHSA-hfg8-hc9c-6c3h) — moby/go-archive: crafted tar
+# archive can write outside the extraction directory ("CopyEscape")
+#
+# Found in: usr/libexec/docker/cli-plugins/docker-buildx
+# Fixed in: golang.org/moby/go-archive 0.3.0 (installed: v0.2.1)
+#
+# DIFFERENT RISK CATEGORY from every other entry in this file — flagged
+# here explicitly rather than treated as routine. This is not a low-
+# severity or theoretical finding: CopyEscape is a real, actively-
+# discussed CVSS 7.1 container-to-host arbitrary file write via crafted
+# tar extraction (a TOCTOU race resolving absolute symlinks during
+# extraction), covered in independent security research under its own
+# name, with Docker treating it as serious enough for a coordinated
+# disclosure extension and a follow-up hardening release after the first
+# fix caused functional regressions. Given a Docker security team invested
+# that much care in getting the fix right, "buildx hasn't rebuilt yet"
+# deserves real scrutiny before being treated the same as an ordinary
+# dependency lag.
+#
+# Confirmed, not assumed, that no fix is currently installable: as of
+# 2026-08-27, v0.36.1 is docker/buildx's actual latest release (GitHub's
+# own release list, tagged [Latest], released 2026-08-04) — and its
+# complete "Dependency Changes" section lists exactly one bump,
+# `github.com/moby/buildkit v0.32.0 -> v0.32.2`. No go-archive change at
+# all since v0.36.0 (which itself only reached v0.2.1, confirmed via that
+# release's own dependency diff). golang.org/moby/go-archive has iterated
+# quickly since the July 30 fix (0.3.0 -> 0.3.1 -> 0.3.2 -> 0.3.3, the
+# last three addressing real regressions and correctness issues from the
+# first hardening pass) — buildx has adopted none of them yet. Contrast
+# with docker-compose (clean in this same scan): compose carries its own
+# *direct* go-archive dependency, independent of whatever buildx vendors,
+# and has already bumped it straight through to 0.3.3 — this is why the
+# two plugins diverge here despite shipping side by side in this image.
+#
+# NOT CONFIRMED: whether buildx's own extraction code paths (build
+# context handling, cache import/export) actually reach the vulnerable
+# symbols in an attacker-reachable way comparable to the `docker cp`
+# vector the CVE was disclosed against. Left in rather than dropped for
+# the same reason as the yq/golang.org-net entry above — Trivy's scan is
+# version-based, not reachability-based, so the finding stands regardless
+# — but this caveat is recorded so nobody reads this entry as "confirmed
+# safe," only as "confirmed unfixable this week."
+#
+# SHORT EXPIRY, DELIBERATELY NOT THE STANDING 2026-11-10 CHECKPOINT:
+# given the pace of go-archive's own point releases and the level of
+# attention this CVE has received, a fix landing in buildx within days is
+# plausible, not a months-out prospect. Re-check docker/buildx's release
+# list directly before 2026-09-05 — if v0.36.1 is no longer the latest
+# tag and the new release's dependency diff shows go-archive at 0.3.0 or
+# above, drop this entry; if not, re-verify and extend deliberately rather
+# than let this lapse silently into a routine, unreviewed suppression.
+# ------------------------------------------------------------------------------
+CVE-2026-17106 exp:2026-09-05
 
 # ------------------------------------------------------------------------------
 # GHSA-6v7p-g79w-8964 — msgpack: Out-of-bounds read / crash on Unpacker reuse
