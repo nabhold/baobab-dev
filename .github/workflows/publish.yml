@@ -367,43 +367,25 @@ jobs:
       # platform-only naming (`digests-amd64`/`digests-arm64`) would
       # collide between all of them.
       #
-      # FIX (Option A): steps.build.outputs.digest is the INDEX digest
-      # BuildKit produced for this single-platform push — sbom/provenance
-      # being enabled means even a one-platform build pushes a 2-entry
-      # index (image manifest + attestation manifest), not a flat manifest.
-      # Exporting that index digest directly, then feeding it into
-      # `imagetools create` in the publish job, hits a documented buildx
-      # gap (docker/buildx#3433 — "individual image manifests... dropped
-      # their related attestation manifests" during imagetools create
-      # merges) that drops the attestation for at least one platform per
-      # merge — confirmed live: always linux/amd64, never linux/arm64,
-      # across three separate publish runs of the `frontend` target.
-      # Exporting the FLAT image-manifest digest instead (extracted here
-      # from within the pushed index) routes that later merge through
-      # buildx's referrers-API-based attestation rediscovery path, which is
-      # what #3433 actually fixed. If this doesn't resolve it, the fallback
-      # is Option B: hand-construct the merged index via crane instead of
-      # relying on `imagetools create`'s automatic behavior at all.
+      # REVERTED Option A: briefly exported the flat image-manifest digest
+      # instead of this index digest, on the theory that it would route
+      # `imagetools create`'s later merge through buildx's referrers-API
+      # attestation-rediscovery path (docker/buildx#3433). Confirmed live
+      # that this made things WORSE — 100% of publish legs failed instead
+      # of ~50% — meaning GHCR/buildx doesn't successfully recover
+      # attestations via that path in this setup. Reverted to exporting
+      # this index digest (image + attestation as a 2-entry index), because
+      # the actual fix (Option B, see the "Publish multi-architecture OCI
+      # manifest" step below) uses `crane index append`'s `--flatten`
+      # behavior, which specifically needs an INDEX as its source to
+      # correctly pull both children — the opposite requirement from
+      # Option A.
       - name: Export architecture image digest
         if: startsWith(github.ref, 'refs/tags/')
-        env:
-          PUSHED_DIGEST: ${{ steps.build.outputs.digest }}
-          PLATFORM: ${{ matrix.platform }}
         run: |
-          set -euo pipefail
-          IMG="${REGISTRY}/${IMAGE_NAME}"
-          ARCH="${PLATFORM#linux/}"
-
-          FLAT_DIGEST=$(docker buildx imagetools inspect "${IMG}@${PUSHED_DIGEST}" --format '{{ json .Manifest }}' | \
-            jq -r --arg arch "${ARCH}" '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
-
-          if [[ -z "${FLAT_DIGEST}" || "${FLAT_DIGEST}" == "null" ]]; then
-            echo "::error:: Could not find a flat image manifest for ${PLATFORM} inside the pushed index ${IMG}@${PUSHED_DIGEST}."
-            exit 1
-          fi
-
           mkdir -p "${{ runner.temp }}/digests"
-          touch "${{ runner.temp }}/digests/${FLAT_DIGEST#sha256:}"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
         if: startsWith(github.ref, 'refs/tags/')
@@ -659,6 +641,26 @@ jobs:
       # like versus a transient one. `latest=false` disables the implicit
       # tag entirely; only the explicit, correctly-suffixed rule produces a
       # `latest` tag now.
+      # crane (google/go-containerregistry) fetches raw OCI blobs by digest
+      # and constructs OCI indices with full manual control — buildx has no
+      # equivalent for either. MOVED earlier in this job (was originally
+      # installed just before the provenance-extraction step, where it was
+      # first needed for `crane blob`) because Option B (below) now needs
+      # it for the manifest-merge step too, not just extraction.
+      - name: Install crane CLI tool
+        env:
+          CRANE_VERSION: "0.21.9"
+          CRANE_SHA256: "5c16d8ddb971cb1d5e6ed8b1e743da8224414eeba2c2762d8f1a61b2f095699e"
+        run: |
+          set -euo pipefail
+          ASSET="go-containerregistry_Linux_x86_64.tar.gz"
+          curl -fsSL -o "${ASSET}" "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/${ASSET}"
+          echo "${CRANE_SHA256}  ${ASSET}" | sha256sum -c -
+          tar -xzf "${ASSET}" crane
+          chmod +x crane
+          sudo mv crane /usr/local/bin/crane
+          crane version
+
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -685,71 +687,92 @@ jobs:
           pattern: digests-${{ matrix.target }}-*
           merge-multiple: true
 
-      # Merge per-architecture digests into a unified multi-arch OCI index.
+      # ------------------------------------------------------------------
+      # Merge per-architecture digests into a unified multi-arch OCI index
+      # ------------------------------------------------------------------
+      # OPTION B — replaces `docker buildx imagetools create`, which has a
+      # documented gap (docker/buildx#3433: "individual image manifests...
+      # dropped their related attestation manifests") dropping the
+      # attestation-manifest sibling for at least one platform when merging
+      # attestation-bearing index sources. Confirmed live against this
+      # exact pipeline: consistently linux/amd64, never linux/arm64, across
+      # three separate publish runs of the `frontend` target. Option A
+      # (exporting flat manifest digests instead, to route through buildx's
+      # referrers-API attestation-rediscovery path) was tried first and
+      # made things WORSE — 100% of legs failed instead of ~50% — ruling
+      # that path out entirely rather than just this specific symptom.
+      #
+      # `crane index append`'s `--flatten` defaults to true: since each
+      # `-m` source here is itself a 2-entry index (image manifest +
+      # attestation manifest, from the single-platform sbom/provenance-
+      # enabled push — see the build job's digest-export comment),
+      # `--flatten` means crane appends BOTH children of each source index
+      # into the new combined index, not the source index as one opaque
+      # entry. This is full manual control over the merge, independent of
+      # whatever internal buildx heuristic was dropping amd64's
+      # attestation — verified against go-containerregistry's own
+      # documented usage (cmd/crane/doc/crane_index_append.md), not
+      # inferred from buildx behavior this time.
+      #
+      # Only the PRIMARY tag is created via `index append` (which does the
+      # actual content push); every other tag (major.minor, major, latest)
+      # is applied afterward via `crane tag`, which retags an existing
+      # digest without re-uploading any content — far cheaper than
+      # re-running `index append` once per tag.
       - name: Publish multi-architecture OCI manifest
         id: create-manifest
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          TAGS_JSON: ${{ steps.meta.outputs.json }}
         run: |
           set -euo pipefail
-
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
-          TAG_ARGS=()
-          while IFS= read -r tag; do
-            [[ -n "${tag}" ]] && TAG_ARGS+=(--tag "${tag}")
-          done <<< "${TAGS}"
-
-          DIGEST_ARGS=()
-          for f in "${{ runner.temp }}/digests"/*; do
-            DIGEST_ARGS+=("${IMG}@sha256:$(basename "$f")")
-          done
+          DIGEST_FILES=("${{ runner.temp }}/digests"/*)
 
           # Guard against a silently incomplete manifest: fail loudly rather
           # than publishing a "multi-arch" image that only actually supports
           # one architecture.
-          if [[ ${#DIGEST_ARGS[@]} -lt 2 ]]; then
-            echo "::error:: Expected 2 architecture digests (amd64 + arm64), found ${#DIGEST_ARGS[@]}."
+          if [[ ${#DIGEST_FILES[@]} -lt 2 ]]; then
+            echo "::error:: Expected 2 architecture digests (amd64 + arm64), found ${#DIGEST_FILES[@]}."
             echo "::error:: Check the 'build' job's per-platform 'Upload digest' steps."
             exit 1
           fi
 
-          # Combine amd64 and arm64 digest layers into a single tag
-          docker buildx imagetools create \
-            "${TAG_ARGS[@]}" \
-            "${DIGEST_ARGS[@]}"
+          DIGEST_ARGS=()
+          for f in "${DIGEST_FILES[@]}"; do
+            DIGEST_ARGS+=(-m "${IMG}@sha256:$(basename "$f")")
+          done
 
-          # Retrieve final OCI index manifest digest for cryptographic signing
-          FIRST_TAG=$(echo "${TAGS}" | head -n1)
-          DIGEST=$(docker buildx imagetools inspect "${FIRST_TAG}" --format '{{.Manifest.Digest}}')
+          mapfile -t ALL_TAGS < <(echo "${TAGS_JSON}" | jq -r '.tags[]')
+
+          if [[ ${#ALL_TAGS[@]} -eq 0 ]]; then
+            echo "::error:: docker/metadata-action produced zero tags — nothing to publish."
+            exit 1
+          fi
+
+          PRIMARY_TAG="${ALL_TAGS[0]}"
+
+          crane index append "${DIGEST_ARGS[@]}" -t "${PRIMARY_TAG}"
+
+          DIGEST=$(crane digest "${PRIMARY_TAG}")
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
-      # DEBUG: confirms provenance survives the imagetools create merge, now that publish has its own buildx.
+          # Apply every remaining tag to the same digest just created.
+          for full_tag in "${ALL_TAGS[@]:1}"; do
+            [[ -z "${full_tag}" ]] && continue
+            short_tag="${full_tag##*:}"
+            crane tag "${IMG}@${DIGEST}" "${short_tag}"
+          done
+
+      # DEBUG: confirms the attestation-manifest siblings survived crane's merge, for both platforms this time.
       - name: Debug — inspect merged manifest before extracting provenance
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
         run: |
-          echo "::group::buildx version (publish job)"
-          docker buildx version
+          echo "::group::Full crane manifest of merged index"
+          crane manifest "${REGISTRY}/${IMAGE_NAME}@${DIGEST}" | jq '.'
           echo "::endgroup::"
-          echo "::group::Full imagetools inspect of merged index"
-          docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}@${DIGEST}" \
-            --format '{{ json . }}' | jq '.'
-          echo "::endgroup::"
-      # NEW: crane (google/go-containerregistry) fetches raw OCI blobs by digest — buildx has no equivalent, and it's the tool Docker's own docs use for the manual attestation-extraction workaround (docker/docs#23366).
-      - name: Install crane CLI tool
-        env:
-          CRANE_VERSION: "0.21.9"
-          CRANE_SHA256: "5c16d8ddb971cb1d5e6ed8b1e743da8224414eeba2c2762d8f1a61b2f095699e"
-        run: |
-          set -euo pipefail
-          ASSET="go-containerregistry_Linux_x86_64.tar.gz"
-          curl -fsSL -o "${ASSET}" "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/${ASSET}"
-          echo "${CRANE_SHA256}  ${ASSET}" | sha256sum -c -
-          tar -xzf "${ASSET}" crane
-          chmod +x crane
-          sudo mv crane /usr/local/bin/crane
-          crane version
+
       # Extract per-platform SLSA provenance predicates
       # BuildKit already computed a full, genuine SLSA v1 predicate per
       # platform in the `build` job (`provenance: true`); it's embedded,

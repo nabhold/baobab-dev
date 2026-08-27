@@ -108,7 +108,7 @@
 
   "customizations": {
     "codespaces": {
-      "openFiles": ["README.md", "docker-compose.yml"]
+      "openFiles": ["README.md", "docker-compose.yml"] 
     },
     "vscode": {
       "extensions": [
