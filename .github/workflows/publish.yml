@@ -609,22 +609,31 @@ jobs:
       - name: Setup Docker Buildx Engine
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
-      # `flavor: suffix=...` is empty for `final` (unsuffixed tags, exactly
-      # today's behavior) and `-<target>` for every other target — e.g.
-      # `frontend-e2e` produces v1.1.0-frontend-e2e, v1.1-frontend-e2e,
-      # v1-frontend-e2e, latest-frontend-e2e alongside final's unsuffixed
-      # and frontend's `-frontend` equivalents. Verified against
-      # docker/metadata-action's own issue tracker: `flavor.suffix` DOES
-      # apply to this explicit `type=raw,value=latest` rule (the `onlatest`
-      # attribute only concerns metadata-action's separate *implicit*
-      # auto-latest tag, which this workflow doesn't use) — confirmed
-      # before relying on it, not assumed.
+      # FIX (found via a live, reproducible failure — not caught by the
+      # earlier verification): `flavor.suffix` correctly applies to the
+      # EXPLICIT `type=raw,value=latest` rule below, as verified earlier —
+      # but docker/metadata-action ALSO generates its own SEPARATE,
+      # IMPLICIT auto-latest tag by default, independent of that rule, and
+      # `suffix` does NOT apply to it unless `onlatest=true` is set. Never
+      # explicitly disabling that implicit tag (via `latest=false`) meant
+      # BOTH fired for every non-final target: the correct
+      # `latest-<target>` from the explicit rule, AND an accidental bare
+      # `latest` from the implicit one — so `final` and every other target
+      # were all concurrently pushing to the SAME `ghcr.io/.../baobab-dev:
+      # latest` tag in parallel matrix legs. This is a genuine, 100%-
+      # reproducible race condition, not a timing issue — confirmed by two
+      # consecutive full-retry-exhaustion failures with real backoff delays
+      # that changed nothing, which is exactly what a real collision looks
+      # like versus a transient one. `latest=false` disables the implicit
+      # tag entirely; only the explicit, correctly-suffixed rule produces a
+      # `latest` tag now.
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
+            latest=false
             suffix=${{ matrix.target == 'final' && '' || format('-{0}', matrix.target) }}
           tags: |
             type=semver,pattern={{version}}
