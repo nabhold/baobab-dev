@@ -733,7 +733,80 @@ jobs:
           set -euo pipefail
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
-          MANIFEST_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+          # FIX: a live release run (v1.1.0, publishing 3 targets instead of
+          # 2 — 6 concurrent push-by-digest writes to this same repository
+          # instead of 4) saw the `frontend` leg fail here with "No
+          # attestation manifest found for linux/amd64" — while the
+          # `frontend-e2e` leg, publishing for the first time and building
+          # a materially larger image, succeeded in the SAME run. That
+          # inversion (the simpler, already-proven target failing while the
+          # newer, heavier one succeeded) argues against a build-content
+          # bug and for a GHCR read-after-write propagation delay under
+          # higher concurrent write load — but ONE occurrence isn't
+          # confirmed proof either way (this project has been burned before
+          # by declaring "transient" too quickly). This retries the WHOLE
+          # fetch, not just the jq parse: re-parsing the SAME possibly-
+          # incomplete JSON again would fail identically, so the fetch
+          # itself must be redone. Mirrors cosign-retry.sh's capped
+          # exponential backoff + equal jitter algorithm (proven pattern
+          # already trusted elsewhere in this pipeline for registry/Rekor
+          # flakiness) — NOT a call to cosign-retry.sh itself, since its
+          # final error message specifically blames a rekor.sigstore.dev
+          # outage, which would be actively wrong here: this reads a GHCR
+          # manifest, nothing to do with Rekor.
+          ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
+          BASE_DELAY="${MANIFEST_RETRY_BASE_DELAY:-10}"
+          MAX_DELAY="${MANIFEST_RETRY_MAX_DELAY:-60}"
+
+          manifest_backoff_sleep() {
+            local attempt="$1" delay half jitter sleep_time
+            delay=$(( BASE_DELAY * (1 << (attempt - 1)) ))
+            (( delay > MAX_DELAY )) && delay="${MAX_DELAY}"
+            half=$(( delay / 2 ))
+            jitter=$(( RANDOM % (half + 1) ))
+            sleep_time=$(( half + jitter ))
+            echo "::notice:: waiting ${sleep_time}s before attempt $((attempt + 1))/${ATTEMPTS}."
+            sleep "${sleep_time}"
+          }
+
+          MANIFEST_JSON=""
+
+          for attempt in $(seq 1 "${ATTEMPTS}"); do
+            CANDIDATE_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+
+            complete=true
+            for PLATFORM in linux/amd64 linux/arm64; do
+              ARCH="${PLATFORM#linux/}"
+              IMAGE_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg arch "${ARCH}" \
+                '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
+              if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "null" ]]; then
+                complete=false
+                break
+              fi
+              ATT_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg ref "${IMAGE_DIGEST}" \
+                '.manifests[] | select(.annotations."vnd.docker.reference.type" == "attestation-manifest" and .annotations."vnd.docker.reference.digest" == $ref) | .digest')
+              if [[ -z "${ATT_DIGEST}" || "${ATT_DIGEST}" == "null" ]]; then
+                complete=false
+                break
+              fi
+            done
+
+            if [[ "${complete}" == "true" ]]; then
+              MANIFEST_JSON="${CANDIDATE_JSON}"
+              break
+            fi
+
+            echo "::warning:: attempt ${attempt}/${ATTEMPTS}: merged index ${IMG}@${DIGEST} is missing an expected image-manifest or attestation-manifest sibling for ${PLATFORM}."
+            if [[ "${attempt}" -lt "${ATTEMPTS}" ]]; then
+              manifest_backoff_sleep "${attempt}"
+            fi
+          done
+
+          if [[ -z "${MANIFEST_JSON}" ]]; then
+            echo "::error:: All ${ATTEMPTS} attempts failed to find a complete set of image/attestation manifests in ${IMG}@${DIGEST}."
+            echo "::error:: This MAY be a GHCR read-after-write propagation delay under concurrent multi-target publishing, OR a genuine gap in the 'build' job's 'Build container image with SBOM & SLSA Provenance' step — check both; do not assume either without a second data point."
+            exit 1
+          fi
 
           for PLATFORM in linux/amd64 linux/arm64; do
             ARCH="${PLATFORM#linux/}"
@@ -921,7 +994,63 @@ jobs:
           set -euo pipefail
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
-          MANIFEST_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+          # Same fix as the provenance-extraction step above (see its
+          # comment for the full incident writeup) — this step has the
+          # identical fetch-then-parse pattern and would fail the same way
+          # under the same GHCR read-after-write timing.
+          ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
+          BASE_DELAY="${MANIFEST_RETRY_BASE_DELAY:-10}"
+          MAX_DELAY="${MANIFEST_RETRY_MAX_DELAY:-60}"
+
+          manifest_backoff_sleep() {
+            local attempt="$1" delay half jitter sleep_time
+            delay=$(( BASE_DELAY * (1 << (attempt - 1)) ))
+            (( delay > MAX_DELAY )) && delay="${MAX_DELAY}"
+            half=$(( delay / 2 ))
+            jitter=$(( RANDOM % (half + 1) ))
+            sleep_time=$(( half + jitter ))
+            echo "::notice:: waiting ${sleep_time}s before attempt $((attempt + 1))/${ATTEMPTS}."
+            sleep "${sleep_time}"
+          }
+
+          MANIFEST_JSON=""
+
+          for attempt in $(seq 1 "${ATTEMPTS}"); do
+            CANDIDATE_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+
+            complete=true
+            for PLATFORM in linux/amd64 linux/arm64; do
+              ARCH="${PLATFORM#linux/}"
+              IMAGE_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg arch "${ARCH}" \
+                '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
+              if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "null" ]]; then
+                complete=false
+                break
+              fi
+              ATT_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg ref "${IMAGE_DIGEST}" \
+                '.manifests[] | select(.annotations."vnd.docker.reference.type" == "attestation-manifest" and .annotations."vnd.docker.reference.digest" == $ref) | .digest')
+              if [[ -z "${ATT_DIGEST}" || "${ATT_DIGEST}" == "null" ]]; then
+                complete=false
+                break
+              fi
+            done
+
+            if [[ "${complete}" == "true" ]]; then
+              MANIFEST_JSON="${CANDIDATE_JSON}"
+              break
+            fi
+
+            echo "::warning:: attempt ${attempt}/${ATTEMPTS}: merged index ${IMG}@${DIGEST} is missing an expected image-manifest or attestation-manifest sibling for ${PLATFORM}."
+            if [[ "${attempt}" -lt "${ATTEMPTS}" ]]; then
+              manifest_backoff_sleep "${attempt}"
+            fi
+          done
+
+          if [[ -z "${MANIFEST_JSON}" ]]; then
+            echo "::error:: All ${ATTEMPTS} attempts failed to find a complete set of image/attestation manifests in ${IMG}@${DIGEST}."
+            echo "::error:: This MAY be a GHCR read-after-write propagation delay under concurrent multi-target publishing, OR a genuine gap in the 'build' job's SBOM generation — check both; do not assume either without a second data point."
+            exit 1
+          fi
 
           for PLATFORM in linux/amd64 linux/arm64; do
             ARCH="${PLATFORM#linux/}"
