@@ -776,20 +776,32 @@ jobs:
       # Extract per-platform SLSA provenance predicates
       # BuildKit already computed a full, genuine SLSA v1 predicate per
       # platform in the `build` job (`provenance: true`); it's embedded,
-      # unsigned, in the OCI index `imagetools create` just merged. This
-      # step extracts exactly that — no new content invented — so the
+      # unsigned, in the OCI index `crane index append` just merged (see
+      # that step's comment for why crane replaced `imagetools create`).
+      # This step extracts exactly that — no new content invented — so the
       # "Attest container image provenance" step below signs REAL build
       # data. cosign has no visibility into BuildKit's native embedded
       # attestation (different OCI convention than cosign's own
       # `sha256-<digest>.att`; `cosign download attestation` 404s against
-      # it), so `docker buildx imagetools inspect` is the only way to hand
-      # that content to cosign. Provenance is keyed per-platform
-      # (`.Provenance["linux/amd64"]`, `["linux/arm64"]`) with no single
-      # combined predicate, hence two predicate files and two DSSE
-      # statements attested against the same multi-arch digest (cosign
-      # appends rather than overwrites, so both coexist and either
-      # satisfies scripts/verify-image.sh's check).
-      # REWRITTEN: buildx's convenience `.Provenance` map came back empty for BOTH platforms after imagetools create (confirmed via the debug step above), even though the raw attestation manifests are present and correctly linked in the merged index — a known gap in the create+inspect roundtrip (see docker/docs#23366). This walks the raw OCI index manually — Docker's own documented workaround — to fetch each platform's REAL BuildKit-generated in-toto statement, preferring the SLSA v1.0 predicate layer and falling back to v0.2 only if v1 is genuinely absent. Never fabricates a predicate.
+      # it), so reading the raw index manually is the only way to hand
+      # that content to cosign. Provenance is keyed per-platform, hence two
+      # predicate files and two DSSE statements attested against the same
+      # multi-arch digest (cosign appends rather than overwrites, so both
+      # coexist and either satisfies scripts/verify-image.sh's check).
+      # REWRITTEN: buildx's convenience `.Provenance` map came back empty
+      # for BOTH platforms after `imagetools create` (a known gap in that
+      # roundtrip, docker/docs#23366). Manifest merging was later replaced
+      # entirely with `crane index append` (see that step's comment — a
+      # separate, confirmed buildx bug dropped attestation siblings
+      # outright, not just the convenience map). This walks the raw OCI
+      # index manually via `crane manifest` — the SAME tool that built it,
+      # not buildx's `imagetools inspect`, which produced an incomplete
+      # view of a crane-constructed index even though the underlying
+      # registry content was correct (confirmed: this exact "No attestation
+      # manifest found" error persisted after switching the merge to crane,
+      # until the READ side was also switched to crane here). Never
+      # fabricates a predicate; prefers the SLSA v1.0 predicate layer,
+      # falling back to v0.2 only if v1 is genuinely absent.
       - name: Extract per-platform SLSA provenance predicates
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
@@ -800,24 +812,22 @@ jobs:
           # FIX: a live release run (v1.1.0, publishing 3 targets instead of
           # 2 — 6 concurrent push-by-digest writes to this same repository
           # instead of 4) saw the `frontend` leg fail here with "No
-          # attestation manifest found for linux/amd64" — while the
-          # `frontend-e2e` leg, publishing for the first time and building
-          # a materially larger image, succeeded in the SAME run. That
-          # inversion (the simpler, already-proven target failing while the
-          # newer, heavier one succeeded) argues against a build-content
-          # bug and for a GHCR read-after-write propagation delay under
-          # higher concurrent write load — but ONE occurrence isn't
-          # confirmed proof either way (this project has been burned before
-          # by declaring "transient" too quickly). This retries the WHOLE
-          # fetch, not just the jq parse: re-parsing the SAME possibly-
-          # incomplete JSON again would fail identically, so the fetch
-          # itself must be redone. Mirrors cosign-retry.sh's capped
-          # exponential backoff + equal jitter algorithm (proven pattern
-          # already trusted elsewhere in this pipeline for registry/Rekor
-          # flakiness) — NOT a call to cosign-retry.sh itself, since its
-          # final error message specifically blames a rekor.sigstore.dev
-          # outage, which would be actively wrong here: this reads a GHCR
-          # manifest, nothing to do with Rekor.
+          # attestation manifest found for linux/amd64". Retrying the whole
+          # fetch (not just the jq parse — re-parsing the SAME possibly-
+          # incomplete JSON would fail identically) did not resolve it
+          # across repeated runs, ruling out transience. The actual cause
+          # was two compounding issues: (1) `imagetools create` dropping an
+          # attestation sibling during merge (fixed by switching to `crane
+          # index append`), and (2) `imagetools inspect` producing an
+          # incomplete read of the resulting crane-built index even after
+          # (1) was fixed (fixed by reading with `crane manifest` instead,
+          # below). The retry loop itself is kept as defense-in-depth for
+          # genuine registry propagation delays, which remain possible
+          # even though they weren't the actual cause here — mirrors
+          # cosign-retry.sh's capped exponential backoff + equal jitter
+          # algorithm, not a call to that script itself, since its final
+          # error message specifically blames a rekor.sigstore.dev outage,
+          # which has nothing to do with a GHCR manifest read.
           ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
           BASE_DELAY="${MANIFEST_RETRY_BASE_DELAY:-10}"
           MAX_DELAY="${MANIFEST_RETRY_MAX_DELAY:-60}"
@@ -836,7 +846,7 @@ jobs:
           MANIFEST_JSON=""
 
           for attempt in $(seq 1 "${ATTEMPTS}"); do
-            CANDIDATE_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+            CANDIDATE_JSON=$(crane manifest "${IMG}@${DIGEST}")
 
             complete=true
             for PLATFORM in linux/amd64 linux/arm64; do
@@ -896,7 +906,7 @@ jobs:
               exit 1
             fi
 
-            ATTESTATION_RAW=$(docker buildx imagetools inspect "${IMG}@${ATTESTATION_DIGEST}" --raw)
+            ATTESTATION_RAW=$(crane manifest "${IMG}@${ATTESTATION_DIGEST}")
 
             # Prefer the real SLSA v1.0 in-toto layer; fall back to v0.2 only if BuildKit genuinely didn't emit v1.
             PREDICATE_DIGEST=$(echo "${ATTESTATION_RAW}" | jq -r \
@@ -1059,9 +1069,11 @@ jobs:
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
           # Same fix as the provenance-extraction step above (see its
-          # comment for the full incident writeup) — this step has the
-          # identical fetch-then-parse pattern and would fail the same way
-          # under the same GHCR read-after-write timing.
+          # comment for the full incident writeup, including why this now
+          # reads via `crane manifest` rather than `docker buildx imagetools
+          # inspect`) — this step has the identical fetch-then-parse
+          # pattern and failed the same way for the same two compounding
+          # reasons.
           ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
           BASE_DELAY="${MANIFEST_RETRY_BASE_DELAY:-10}"
           MAX_DELAY="${MANIFEST_RETRY_MAX_DELAY:-60}"
@@ -1080,7 +1092,7 @@ jobs:
           MANIFEST_JSON=""
 
           for attempt in $(seq 1 "${ATTEMPTS}"); do
-            CANDIDATE_JSON=$(docker buildx imagetools inspect "${IMG}@${DIGEST}" --format '{{ json .Manifest }}')
+            CANDIDATE_JSON=$(crane manifest "${IMG}@${DIGEST}")
 
             complete=true
             for PLATFORM in linux/amd64 linux/arm64; do
@@ -1137,7 +1149,7 @@ jobs:
               exit 1
             fi
 
-            ATTESTATION_RAW=$(docker buildx imagetools inspect "${IMG}@${ATTESTATION_DIGEST}" --raw)
+            ATTESTATION_RAW=$(crane manifest "${IMG}@${ATTESTATION_DIGEST}")
 
             PREDICATE_DIGEST=$(echo "${ATTESTATION_RAW}" | jq -r \
               '.layers[] | select(.annotations."in-toto.io/predicate-type" == "https://spdx.dev/Document") | .digest')
