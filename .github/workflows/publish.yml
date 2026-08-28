@@ -17,13 +17,19 @@
 #   Build + Trivy gate run on every push/PR to `main`. Registry push,
 #   signing, attestation, and GitHub Release wait for an actual `v*.*.*`
 #   tag — a deliberate, reviewed release action, not a side effect of
-#   merging to `main`. Every gating `if:` is `startsWith(github.ref,
-#   'refs/tags/')` (never `github.event_name != 'pull_request'`, which
-#   would also fire on `main` pushes) — see GHCR auth, the real build,
-#   digest export/upload, and the smoke-test steps, plus the `publish`
-#   job's own `if:`. Because `publish` only ever runs on a tag ref, its
-#   `metadata-action` step needs no branch/sha tag patterns, and the
-#   `latest` tag's `enable:` needs no extra tag-ref guard.
+#   merging to `main` — OR a workflow_dispatch explicitly requesting an
+#   existing tag rebuild (`workflow_dispatch.inputs.tag`), which follows
+#   the identical path. Every gating `if:` reads
+#   `needs.sanity-check.outputs.is_release` (resolved once, in
+#   sanity-check's "Resolve release context" step, from either
+#   `startsWith(github.ref, 'refs/tags/')` or a validated dispatch tag
+#   input — never `github.event_name != 'pull_request'`, which would also
+#   fire on `main` pushes) — see GHCR auth, the real build, digest
+#   export/upload, and the smoke-test steps, plus the `publish` job's own
+#   `if:`. `metadata-action`'s semver tag rules and the `latest` tag's
+#   `enable:` check likewise read `needs.sanity-check.outputs.release_tag`
+#   rather than the raw ref, since `github.ref` on a workflow_dispatch run
+#   is the dispatched branch, not the tag being rebuilt.
 #
 # SECURITY SCAN TRIGGER POLICY (shift-left):
 #   The Trivy gate ("Build local single-manifest image for scanning"
@@ -127,26 +133,84 @@ defaults:
 
 jobs:
 
-  # Job 1: Pre-flight Lockfile Integrity & Auto-Sync
-  # Verifies config/versions.lock matches config/versions.yaml, auto-commits
-  # drift on branches, and hard-fails drift on a tag push (see "Fail on
-  # tag-push drift" below). Runs on every trigger — build always needs a
-  # correct lockfile, whether or not this run ever publishes anything.
+  # Job 1: Pre-flight Lockfile Integrity & Release Context Resolution
+  # Verifies config/versions.lock matches config/versions.yaml and hard-fails
+  # on any drift (PR, branch push, tag push, or workflow_dispatch rebuild
+  # alike — see "Fail on lockfile drift" below; auto-resolution now lives
+  # exclusively in .github/workflows/update-lockfile.yml, never here). Also
+  # resolves which ref every downstream job should build from and whether
+  # this run should publish, so a workflow_dispatch rebuild of an existing
+  # tag (workflow_dispatch.inputs.tag) behaves identically to a real tag
+  # push (see "Resolve release context" below). Runs on every trigger —
+  # build always needs a correct lockfile, whether or not this run ever
+  # publishes anything.
   sanity-check:
     name: Lockfile Integrity & Auto-Sync
     runs-on: ubuntu-26.04
     timeout-minutes: 20
 
-    # `contents: write` — needed to auto-commit resolved lockfile changes on
-    # branches (never on tag pushes; see "Fail on tag-push drift" below).
+    # `contents: read` only. CHANGED: this job no longer auto-commits
+    # anything (see "Fail on lockfile drift" below), so it no longer needs
+    # `contents: write`.
     permissions:
-      contents: write
+      contents: read
+
+    outputs:
+      # Empty/'false' unless this run is a real `v*.*.*` tag push OR a
+      # workflow_dispatch requesting an existing tag rebuild — see "Resolve
+      # release context" below. This is what wires up
+      # workflow_dispatch.inputs.tag (previously declared but never read by
+      # any gating `if:` in this file).
+      release_tag: ${{ steps.release-context.outputs.release_tag }}
+      is_release: ${{ steps.release-context.outputs.is_release }}
+      checkout_ref: ${{ steps.release-context.outputs.checkout_ref }}
 
     steps:
+      # Resolves, in one place, what every downstream job/step needs to
+      # agree on: which ref to check out, whether this run should publish,
+      # and which tag string release metadata should use. Runs before
+      # checkout on purpose — it only needs GitHub Actions context, no repo
+      # files.
+      #
+      # A workflow_dispatch with `tag` set now behaves like rebuilding that
+      # exact tag: checks it out, builds, and — if validation passes —
+      # publishes and releases exactly as a real tag push would. A dispatch
+      # with `tag` left empty behaves as before: validation-only, against
+      # whichever branch was selected in the dispatch UI.
+      #
+      # Tag format is validated here, not left to fail later at checkout or
+      # deep inside "docker/metadata-action produced zero tags" — a
+      # malformed dispatch input fails immediately with a clear message
+      # instead of surfacing as a confusing downstream symptom.
+      - name: Resolve release context
+        id: release-context
+        run: |
+          set -euo pipefail
+          DISPATCH_TAG="${{ github.event.inputs.tag }}"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${DISPATCH_TAG}" ]]; then
+            if [[ ! "${DISPATCH_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
+              echo "::error:: workflow_dispatch 'tag' input '${DISPATCH_TAG}' does not match this workflow's own tag pattern (v*.*.* or v*.*.*-*)."
+              exit 1
+            fi
+            echo "::notice:: Rebuilding existing tag '${DISPATCH_TAG}' via workflow_dispatch — this run will check out that tag and publish/release exactly as a real tag push would."
+            echo "release_tag=${DISPATCH_TAG}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=${DISPATCH_TAG}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
+            echo "release_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_tag=" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=${{ github.event.pull_request.head.ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout source code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          ref: ${{ steps.release-context.outputs.checkout_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # Pinned + checksummed (not "latest") per this project's binary-pinning
@@ -181,51 +245,36 @@ jobs:
             echo "drift=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Auto-commit resolved lockfile changes — BRANCHES ONLY. A tag is an
-      # immutable pointer to an already-reviewed commit; pushing a new commit
-      # "onto" a tag either fails outright or silently moves the tag and
-      # invalidates anything already signed/attested. See "Fail on tag-push
-      # drift" below for the tag-push case.
-      - name: Auto-commit resolved lockfile changes (branches only)
-        id: auto-commit
-        if: steps.drift-check.outputs.drift == 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: stefanzweifel/git-auto-commit-action@8756aa072ef5b4a080af5dc8fef36c5d586e521d # v5.0.0
-        with:
-          commit_message: "chore(deps): auto-update versions.lock and .python-version via resolve.sh [skip ci]"
-          file_pattern: "config/versions.lock .python-version"
-          commit_author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
-          commit_user_name: "github-actions[bot]"
-          commit_user_email: "41898282+github-actions[bot]@users.noreply.github.com"
-
-      # Fail on tag-push drift: there's no branch to auto-commit to on a tag
-      # push, and there shouldn't be one — a release tag must be built from a
-      # lockfile that was already committed and reviewed. A mismatch here is
-      # a real discrepancy between versions.yaml and what this release claims
-      # to ship, so stop and force a human to reconcile it.
-      - name: Fail on tag-push drift
-        if: steps.drift-check.outputs.drift == 'true' && startsWith(github.ref, 'refs/tags/')
+      # Lockfile drift is now ALWAYS a hard failure — on PRs, branch
+      # pushes, tag pushes, and workflow_dispatch rebuilds alike. CHANGED:
+      # this pipeline previously auto-committed resolved drift on branch
+      # pushes via git-auto-commit-action, and only hard-failed on tag
+      # pushes. That auto-commit was removed:
+      #   1. Publishing pipelines should be deterministic and not mutate
+      #      source as a side effect of building it.
+      #   2. A `pull_request` run — including from a fork — auto-committing
+      #      with `secrets.GITHUB_TOKEN` was a real risk surface: a fork's
+      #      token can't push back to the base repo anyway, so the step
+      #      would either silently no-op or fail in a way easy to mistake
+      #      for a genuine problem.
+      #   3. It duplicated `.github/workflows/update-lockfile.yml`, which
+      #      already does this properly on a schedule + manual dispatch,
+      #      opening a reviewable PR rather than committing directly.
+      # Auto-resolution now lives exclusively in that dedicated workflow;
+      # this job only verifies and fails loudly.
+      - name: Fail on lockfile drift
+        if: steps.drift-check.outputs.drift == 'true'
         run: |
-          echo "::error:: config/versions.lock is out of date with config/versions.yaml on tag '${{ github.ref_name }}'."
-          echo "::error:: Release tags must be immutable and built from a lockfile that was already committed and reviewed."
-          echo "::error:: Run config/resolve.sh locally (or via .github/workflows/update-lockfile.yml), commit the result via a normal PR, then re-cut this tag."
+          echo "::error:: config/versions.lock is out of date with config/versions.yaml on ref '${{ steps.release-context.outputs.checkout_ref }}'."
+          echo "::error:: This pipeline no longer auto-commits resolved lockfiles. Run config/resolve.sh locally, or trigger .github/workflows/update-lockfile.yml, review and merge the resulting PR, then re-run."
           exit 1
 
-      - name: Enforce pull request branch workflow on auto-commit failure
-        if: failure() && steps.auto-commit.outcome == 'failure'
-        run: |
-          echo "::error:: Lockfile drift detected, but auto-commit failed."
-          echo "::error:: Direct pushes to '${{ github.ref_name }}' may be restricted by branch protection."
-          echo "::error:: Please execute resolve.sh locally or update via a Pull Request branch."
-          exit 1
-
-      # Hand off the freshly-resolved lockfile via artifact, not the
-      # auto-commit above: build's checkout later in this run is pinned to
-      # github.sha (the commit that TRIGGERED this run), which can never see
-      # a commit sanity-check makes during its own execution — only a FUTURE
-      # run would. Without this hand-off, any run with genuine drift fails
-      # build's Dockerfile COPY with "versions.lock: not found" (confirmed
-      # via a real failed run). Uploaded unconditionally — pull_request
-      # builds never reach the auto-commit step but still need a lockfile.
+      # Hand off the freshly-resolved lockfile via artifact: build's
+      # checkout later in this run is pinned to the same ref this job
+      # checked out (read-only) — there is no commit for a later checkout
+      # to see, by design (see "Fail on lockfile drift" above). Uploaded
+      # unconditionally — pull_request and non-release builds alike still
+      # need a lockfile.
       - name: Upload resolved lockfile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -294,6 +343,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.sanity-check.outputs.checkout_ref }}
 
       # Overwrites whatever versions.lock the checkout brought in with the
       # exact one sanity-check resolved earlier in THIS run (see "Upload
@@ -314,7 +365,7 @@ jobs:
       # public base image and read the GHA cache, so PR/branch validation
       # builds (which never push) skip this login entirely.
       - name: Authenticate to GitHub Container Registry (GHCR)
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.sanity-check.outputs.is_release == 'true'
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -352,7 +403,7 @@ jobs:
             REVISION=${{ github.sha }}
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ startsWith(github.ref, 'refs/tags/') }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ needs.sanity-check.outputs.is_release == 'true' }}
           cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}-${{ matrix.platform }}
           sbom: true
@@ -361,7 +412,7 @@ jobs:
 
       # DEBUG: confirms BuildKit generated provenance at build time, before any merge step touches it.
       - name: Debug — inspect provenance immediately after build
-        if: startsWith(github.ref, 'refs/tags/') && vars.BAOBAB_PUBLISH_DEBUG == 'true'
+        if: needs.sanity-check.outputs.is_release == 'true' && vars.BAOBAB_PUBLISH_DEBUG == 'true'
         run: |
           echo "::group::buildx version (build job)"
           docker buildx version
@@ -395,14 +446,14 @@ jobs:
       # correctly pull both children — the opposite requirement from
       # Option A.
       - name: Export architecture image digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.sanity-check.outputs.is_release == 'true'
         run: |
           mkdir -p "${{ runner.temp }}/digests"
           digest="${{ steps.build.outputs.digest }}"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: needs.sanity-check.outputs.is_release == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: digests-${{ matrix.target }}-${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
@@ -549,7 +600,7 @@ jobs:
       # to-be-published image, not the local `baobab-dev:scan` image Trivy
       # scans.
       - name: Execute container smoke test (final)
-        if: matrix.target == 'final' && matrix.platform == 'linux/amd64' && startsWith(github.ref, 'refs/tags/')
+        if: matrix.target == 'final' && matrix.platform == 'linux/amd64' && needs.sanity-check.outputs.is_release == 'true'
         run: |
           docker run --rm \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
@@ -576,8 +627,8 @@ jobs:
   # Gated to `v*.*.*` tag pushes only (see PUBLISH TRIGGER POLICY above).
   publish:
     name: "Publish Multi-Arch Manifest & Cosign Sign (${{ matrix.target }})"
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, sanity-check]
+    if: needs.sanity-check.outputs.is_release == 'true'
 
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -613,10 +664,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.sanity-check.outputs.checkout_ref }}
 
       # Same reasoning as build's identical step: this job's checkout is
-      # pinned to github.sha and can't see sanity-check's own-run commit.
-      # Needed so "Create GitHub Release" has versions.lock to attach.
+      # pinned to the resolved release context ref, which for a
+      # workflow_dispatch rebuild is the target tag, not the branch the
+      # dispatch was run against — and can't see sanity-check's own-run
+      # commit regardless. Needed so "Create GitHub Release" has
+      # versions.lock to attach.
       - name: Download resolved lockfile
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -676,6 +732,13 @@ jobs:
           sudo mv crane /usr/local/bin/crane
           crane version
 
+      # EXTRACTED (2026-08-28): the retry-and-verify loop both extraction
+      # steps below need is now scripts/fetch-complete-oci-index.sh — see
+      # that script's header for the full rationale. Made executable once
+      # here since both steps use it.
+      - name: Make fetch-complete-oci-index.sh executable
+        run: chmod +x scripts/fetch-complete-oci-index.sh
+
       - name: Extract Docker tagging metadata
         id: meta
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
@@ -685,10 +748,10 @@ jobs:
             latest=false
             suffix=${{ matrix.target == 'final' && '' || format('-{0}', matrix.target) }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ !contains(github.ref, '-') }}
+            type=semver,pattern={{version}},value=${{ needs.sanity-check.outputs.release_tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.sanity-check.outputs.release_tag }}
+            type=semver,pattern={{major}},value=${{ needs.sanity-check.outputs.release_tag }}
+            type=raw,value=latest,enable=${{ !contains(needs.sanity-check.outputs.release_tag, '-') }}
 
       # Download per-architecture digests exported by the build job — only
       # THIS target's digests. Pattern includes matrix.target: without it,
@@ -845,75 +908,19 @@ jobs:
           # FIX: a live release run (v1.1.0, publishing 3 targets instead of
           # 2 — 6 concurrent push-by-digest writes to this same repository
           # instead of 4) saw the `frontend` leg fail here with "No
-          # attestation manifest found for linux/amd64". Retrying the whole
-          # fetch (not just the jq parse — re-parsing the SAME possibly-
-          # incomplete JSON would fail identically) did not resolve it
-          # across repeated runs, ruling out transience. The actual cause
-          # was two compounding issues: (1) `imagetools create` dropping an
-          # attestation sibling during merge (fixed by switching to `crane
-          # index append`), and (2) `imagetools inspect` producing an
-          # incomplete read of the resulting crane-built index even after
-          # (1) was fixed (fixed by reading with `crane manifest` instead,
-          # below). The retry loop itself is kept as defense-in-depth for
-          # genuine registry propagation delays, which remain possible
-          # even though they weren't the actual cause here — mirrors
-          # cosign-retry.sh's capped exponential backoff + equal jitter
-          # algorithm, not a call to that script itself, since its final
-          # error message specifically blames a rekor.sigstore.dev outage,
-          # which has nothing to do with a GHCR manifest read.
-          ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
-          BASE_DELAY="${MANIFEST_RETRY_BASE_DELAY:-10}"
-          MAX_DELAY="${MANIFEST_RETRY_MAX_DELAY:-60}"
-
-          manifest_backoff_sleep() {
-            local attempt="$1" delay half jitter sleep_time
-            delay=$(( BASE_DELAY * (1 << (attempt - 1)) ))
-            (( delay > MAX_DELAY )) && delay="${MAX_DELAY}"
-            half=$(( delay / 2 ))
-            jitter=$(( RANDOM % (half + 1) ))
-            sleep_time=$(( half + jitter ))
-            echo "::notice:: waiting ${sleep_time}s before attempt $((attempt + 1))/${ATTEMPTS}."
-            sleep "${sleep_time}"
-          }
-
-          MANIFEST_JSON=""
-
-          for attempt in $(seq 1 "${ATTEMPTS}"); do
-            CANDIDATE_JSON=$(crane manifest "${IMG}@${DIGEST}")
-
-            complete=true
-            for PLATFORM in linux/amd64 linux/arm64; do
-              ARCH="${PLATFORM#linux/}"
-              IMAGE_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg arch "${ARCH}" \
-                '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
-              if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "null" ]]; then
-                complete=false
-                break
-              fi
-              ATT_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg ref "${IMAGE_DIGEST}" \
-                '.manifests[] | select(.annotations."vnd.docker.reference.type" == "attestation-manifest" and .annotations."vnd.docker.reference.digest" == $ref) | .digest')
-              if [[ -z "${ATT_DIGEST}" || "${ATT_DIGEST}" == "null" ]]; then
-                complete=false
-                break
-              fi
-            done
-
-            if [[ "${complete}" == "true" ]]; then
-              MANIFEST_JSON="${CANDIDATE_JSON}"
-              break
-            fi
-
-            echo "::warning:: attempt ${attempt}/${ATTEMPTS}: merged index ${IMG}@${DIGEST} is missing an expected image-manifest or attestation-manifest sibling for ${PLATFORM}."
-            if [[ "${attempt}" -lt "${ATTEMPTS}" ]]; then
-              manifest_backoff_sleep "${attempt}"
-            fi
-          done
-
-          if [[ -z "${MANIFEST_JSON}" ]]; then
-            echo "::error:: All ${ATTEMPTS} attempts failed to find a complete set of image/attestation manifests in ${IMG}@${DIGEST}."
-            echo "::error:: This MAY be a GHCR read-after-write propagation delay under concurrent multi-target publishing, OR a genuine gap in the 'build' job's 'Build container image with SBOM & SLSA Provenance' step — check both; do not assume either without a second data point."
-            exit 1
-          fi
+          # attestation manifest found for linux/amd64". Root-caused to two
+          # compounding issues, both fixed: (1) `imagetools create` dropping
+          # an attestation sibling during merge (switched to `crane index
+          # append`), and (2) `imagetools inspect` producing an incomplete
+          # read of the resulting crane-built index even after (1) was
+          # fixed (switched reads to `crane manifest`). The fetch-and-retry
+          # loop that guards against both this and genuine registry
+          # propagation delays now lives in scripts/fetch-complete-oci-index.sh
+          # (EXTRACTED 2026-08-28 — see that script's header for the full
+          # rationale) — this step and "Extract per-platform SPDX SBOM
+          # predicates" below both call it rather than duplicating the loop.
+          MANIFEST_JSON=$(scripts/fetch-complete-oci-index.sh "${IMG}" "${DIGEST}" \
+            "the 'build' job's 'Build container image with SBOM & SLSA Provenance' step")
 
           for PLATFORM in linux/amd64 linux/arm64; do
             ARCH="${PLATFORM#linux/}"
@@ -1102,64 +1109,13 @@ jobs:
           IMG="${REGISTRY}/${IMAGE_NAME}"
 
           # Same fix as the provenance-extraction step above (see its
-          # comment for the full incident writeup, including why this now
-          # reads via `crane manifest` rather than `docker buildx imagetools
-          # inspect`) — this step has the identical fetch-then-parse
-          # pattern and failed the same way for the same two compounding
-          # reasons.
-          ATTEMPTS="${MANIFEST_RETRY_ATTEMPTS:-5}"
-          BASE_DELAY="${MANIFEST_RETRY_BASE_DELAY:-10}"
-          MAX_DELAY="${MANIFEST_RETRY_MAX_DELAY:-60}"
-
-          manifest_backoff_sleep() {
-            local attempt="$1" delay half jitter sleep_time
-            delay=$(( BASE_DELAY * (1 << (attempt - 1)) ))
-            (( delay > MAX_DELAY )) && delay="${MAX_DELAY}"
-            half=$(( delay / 2 ))
-            jitter=$(( RANDOM % (half + 1) ))
-            sleep_time=$(( half + jitter ))
-            echo "::notice:: waiting ${sleep_time}s before attempt $((attempt + 1))/${ATTEMPTS}."
-            sleep "${sleep_time}"
-          }
-
-          MANIFEST_JSON=""
-
-          for attempt in $(seq 1 "${ATTEMPTS}"); do
-            CANDIDATE_JSON=$(crane manifest "${IMG}@${DIGEST}")
-
-            complete=true
-            for PLATFORM in linux/amd64 linux/arm64; do
-              ARCH="${PLATFORM#linux/}"
-              IMAGE_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg arch "${ARCH}" \
-                '.manifests[] | select(.platform.architecture == $arch and .platform.os == "linux") | .digest')
-              if [[ -z "${IMAGE_DIGEST}" || "${IMAGE_DIGEST}" == "null" ]]; then
-                complete=false
-                break
-              fi
-              ATT_DIGEST=$(echo "${CANDIDATE_JSON}" | jq -r --arg ref "${IMAGE_DIGEST}" \
-                '.manifests[] | select(.annotations."vnd.docker.reference.type" == "attestation-manifest" and .annotations."vnd.docker.reference.digest" == $ref) | .digest')
-              if [[ -z "${ATT_DIGEST}" || "${ATT_DIGEST}" == "null" ]]; then
-                complete=false
-                break
-              fi
-            done
-
-            if [[ "${complete}" == "true" ]]; then
-              MANIFEST_JSON="${CANDIDATE_JSON}"
-              break
-            fi
-
-            echo "::warning:: attempt ${attempt}/${ATTEMPTS}: merged index ${IMG}@${DIGEST} is missing an expected image-manifest or attestation-manifest sibling for ${PLATFORM}."
-            if [[ "${attempt}" -lt "${ATTEMPTS}" ]]; then
-              manifest_backoff_sleep "${attempt}"
-            fi
-          done
-
-          if [[ -z "${MANIFEST_JSON}" ]]; then
-            echo "::error:: All ${ATTEMPTS} attempts failed to find a complete set of image/attestation manifests in ${IMG}@${DIGEST}."
-            echo "::error:: This MAY be a GHCR read-after-write propagation delay under concurrent multi-target publishing, OR a genuine gap in the 'build' job's SBOM generation — check both; do not assume either without a second data point."
-            exit 1
-          fi
+          # comment for the full incident writeup) — this step reads the
+          # identical merged index and can fail the same way for the same
+          # reasons. Shared with that step via
+          # scripts/fetch-complete-oci-index.sh rather than duplicating the
+          # retry loop a second time (EXTRACTED 2026-08-28).
+          MANIFEST_JSON=$(scripts/fetch-complete-oci-index.sh "${IMG}" "${DIGEST}" \
+            "the 'build' job's SBOM generation")
 
           for PLATFORM in linux/amd64 linux/arm64; do
             ARCH="${PLATFORM#linux/}"
@@ -1500,8 +1456,8 @@ jobs:
   # hardcoded target list, so a future fourth target needs no change here.
   release:
     name: Create Combined GitHub Release
-    needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish, sanity-check]
+    if: needs.sanity-check.outputs.is_release == 'true'
 
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1514,6 +1470,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.sanity-check.outputs.checkout_ref }}
 
       # Needed so the release can attach versions.lock as a release asset,
       # same as the old single-job version did.
@@ -1594,6 +1552,7 @@ jobs:
         id: create-release
         uses: softprops/action-gh-release@7b4da11513bf3f43f9999e90eabced41ab8bb048 # v2.2.0
         with:
+          tag_name: ${{ needs.sanity-check.outputs.release_tag }}
           draft: true
           files: config/versions.lock
           generate_release_notes: true
@@ -1604,4 +1563,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+          gh release edit "${{ needs.sanity-check.outputs.release_tag }}" --draft=false --repo "${{ github.repository }}"
