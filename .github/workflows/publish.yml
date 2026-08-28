@@ -117,6 +117,14 @@ env:
 permissions:
   contents: read
 
+# Explicit, not relying on GitHub's current Linux default: many `run:` steps
+# in this workflow depend on Bash-specific features (arrays, `[[ ... ]]`,
+# `mapfile`, process substitution, `${array[@]:1}`, `$RANDOM`) that a POSIX
+# `sh` would not support.
+defaults:
+  run:
+    shell: bash
+
 jobs:
 
   # Job 1: Pre-flight Lockfile Integrity & Auto-Sync
@@ -127,6 +135,7 @@ jobs:
   sanity-check:
     name: Lockfile Integrity & Auto-Sync
     runs-on: ubuntu-26.04
+    timeout-minutes: 20
 
     # `contents: write` — needed to auto-commit resolved lockfile changes on
     # branches (never on tag pushes; see "Fail on tag-push drift" below).
@@ -239,12 +248,17 @@ jobs:
 
     # RATIONALE: Route arm64 builds to native ARM GitHub-hosted runners for faster performance.
     runs-on: ${{ matrix.platform == 'linux/arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
+    timeout-minutes: 120
 
     # `packages: write` — needed to push image layers/metadata by digest.
     # Granted job-wide (GitHub Actions has no per-step scoping); only
-    # exercised on tag pushes, and only for the `final` target (see
-    # TIER 1/TIER 2 note below) — frontend/frontend-e2e never push in
-    # this job yet.
+    # exercised on tag pushes. CORRECTED (was stale): this used to say only
+    # `final` pushed and frontend/frontend-e2e "never push in this job yet"
+    # — that was true during the TIER 1 rollout but is no longer accurate.
+    # All three targets now push on tag pushes (see the real build step's
+    # `push:` logic and outputs below); PR/main runs still never push, so
+    # this permission remains unused (but present, since GitHub Actions has
+    # no per-step scoping) outside tag pushes.
     permissions:
       contents: read
       packages: write
@@ -347,7 +361,7 @@ jobs:
 
       # DEBUG: confirms BuildKit generated provenance at build time, before any merge step touches it.
       - name: Debug — inspect provenance immediately after build
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && vars.BAOBAB_PUBLISH_DEBUG == 'true'
         run: |
           echo "::group::buildx version (build job)"
           docker buildx version
@@ -566,6 +580,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
 
     # TIER 2 (baobab-dev-v1_1_0-release-plan-amended.md; ADR-0001): matrix
     # over target instead of a single final-only run. All three targets
@@ -783,6 +798,7 @@ jobs:
 
       # DEBUG: confirms the attestation-manifest siblings survived crane's merge, for both platforms this time.
       - name: Debug — inspect merged manifest before extracting provenance
+        if: vars.BAOBAB_PUBLISH_DEBUG == 'true'
         env:
           DIGEST: ${{ steps.create-manifest.outputs.digest }}
         run: |
@@ -1411,6 +1427,15 @@ jobs:
       # support) — see that step's comment. If this fails with something
       # that reads like "no matching signatures/attestations found" rather
       # than a cryptographic/identity mismatch, start there.
+      - name: Make verify-image.sh executable
+        run: chmod +x scripts/verify-image.sh
+
+      - name: Verify published image signature & attestations
+        env:
+          DIGEST: ${{ steps.create-manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          scripts/verify-image.sh "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
       # ------------------------------------------------------------------------
       # Export this target's published info for the `release` job
       # ------------------------------------------------------------------------
@@ -1479,6 +1504,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     # contents: write — create the GitHub Release. This is the only job
     # that needs it now; `publish`'s matrix legs no longer touch releases.
