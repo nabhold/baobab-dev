@@ -233,6 +233,18 @@ package_managers:
   pnpm:
     version: "latest"
     source: "npm"
+    npm:
+    version: "latest"
+    source: "npm"
+
+  npm_bundled_tar:
+    version: "latest"
+    source: "npm"
+    # NOT the system `tar` binary (apt-managed) — this is the `tar` npm
+    # package bundled inside npm's own node_modules, upgraded in-place for
+    # tar's own CVE fixes (see Dockerfile CHANGE LOG: CVE-2026-59873/
+    # CVE-2026-73566). Floats to "latest" for the same CVE-freshness reason
+    # npm itself does; resolved once here, not at Docker build time.
 
 utilities:
 

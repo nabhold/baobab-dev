@@ -221,6 +221,52 @@ npm_latest() {
         yq -p json -o json -r '.version'
 }
 
+# ------------------------------------------------------------------------------
+# npm registry ("latest" dist-tag lookups)
+#
+# npm itself, and its internally-bundled `tar` dependency (see Dockerfile's
+# `with-node` stage), are intentionally tracked at "latest" for CVE
+# freshness -- the same rationale already applied to uv/poetry/pnpm/task/
+# ripgrep/fd/bat/eza/yq/gh/cosign above, just against the npm registry
+# instead of GitHub Releases. Resolving here (once, outside Docker) rather
+# than inside the Dockerfile's own `npm install -g npm@latest` means a
+# broken/incomplete upstream npm publish (the npm registry has repeatedly
+# 404'd on internal @npmcli/* packages a freshly-published npm version
+# depends on -- a known, recurring npm-side incident class, not unique to
+# us) fails HERE, where it is caught and retried before being baked into a
+# committed versions.lock -- instead of breaking every single Docker build
+# that consumes an already-committed, previously-working lockfile. This is
+# exactly what happened on 2026-08-28: all 6 matrix legs failed identically
+# on `npm install -g npm@latest` because the `with-node` stage floated to
+# npm's `latest` dist-tag at BUILD time instead of resolving it once at
+# LOCKFILE-generation time like every other tool in this file.
+# ------------------------------------------------------------------------------
+
+npm_registry_latest() {
+
+    local package="$1"
+
+    curl -fsSL "https://registry.npmjs.org/${package}/latest" |
+        yq -p json -o json -r '.version'
+}
+
+resolve_npm_registry() {
+
+    local yaml_path="$1"
+    local package="$2"
+
+    local version
+
+    version=$(yaml "$yaml_path")
+
+    if [[ "$version" == "latest" ]]; then
+        info "Resolving ${package}@latest from the npm registry..."
+        npm_registry_latest "$package"
+    else
+        printf "%s" "$version"
+    fi
+}
+
 resolve_npm() {
 
     local yaml_path="$1"
@@ -363,6 +409,9 @@ GH_VERSION=$(resolve_github '.development.github_cli.version' 'cli/cli')
 
 COSIGN_VERSION=$(resolve_github '.security.cosign.version' 'sigstore/cosign')
 
+NPM_VERSION=$(resolve_npm_registry '.package_managers.npm.version' 'npm')
+
+NPM_BUNDLED_TAR_VERSION=$(resolve_npm_registry '.package_managers.npm_bundled_tar.version' 'tar')
 # ------------------------------------------------------------------------------
 # Checksums: ripgrep, fd, bat, eza (per target architecture)
 #
@@ -571,7 +620,9 @@ export TURBO_VERSION=${TURBO_VERSION}
 export PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}
 export SHARP_VERSION=${SHARP_VERSION}
 export LIGHTHOUSE_VERSION=${LIGHTHOUSE_VERSION}
+export NPM_VERSION=${NPM_VERSION}
 
+export NPM_BUNDLED_TAR_VERSION=${NPM_BUNDLED_TAR_VERSION}
 EOF
 
 chmod 644 "$LOCKFILE"

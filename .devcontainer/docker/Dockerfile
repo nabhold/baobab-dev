@@ -71,6 +71,13 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * Pinned npm and its bundled tar dependency to resolved versions
+#   (NPM_VERSION / NPM_BUNDLED_TAR_VERSION) instead of floating `@latest`
+#   at Docker build time — an upstream npm-registry publish incident
+#   (E404 on an internal @npmcli/* dependency) broke every matrix leg
+#   simultaneously on 2026-08-28. See the `with-node` stage comment for
+#   full detail; corresponding config/versions.yaml + config/resolve.sh
+#   changes are tracked separately (PATCH-npm-registry-pinning.md).
 # * Explicitly upgraded setuptools (CVE-2025-47273) and msgpack, both
 #   system-wide and inside Poetry's own isolated pipx venv — Trivy flagged
 #   both at versions well behind their fixes. Neither is caught by this
@@ -513,9 +520,10 @@ FROM base AS with-node
 # versions.yaml's own pnpm.source: npm declaration. yarn has no
 # corresponding entry in versions.yaml at all (no version to pin), so
 # `@stable` is left as-is — not an oversight, there's nothing to pin it to
-# yet.
+# yet, and it hasn't (yet) failed the way npm's own floating tag did (see
+# FIX 2026-08-28 below) — tracked as a follow-up, not bundled into that fix.
 #
-# npm is explicitly self-upgraded to latest right after install. The npm
+# npm was explicitly self-upgraded to latest right after install. The npm
 # build bundled inside NodeSource's Node ${NODE_MAJOR}.x tarball carries
 # its own frozen node_modules (tar, brace-expansion, ip-address, undici),
 # independent of NODE_MAJOR tracking — live-checked (2026-08-13) against
@@ -539,6 +547,22 @@ FROM base AS with-node
 # tar@latest` (not `-g`) run from inside npm's own package directory
 # targets that nested copy specifically, leaving the global npm package
 # unaffected.
+#
+# FIX (2026-08-28): both `npm@latest` above and `tar@latest` just above
+# this line were floating dist-tags resolved at DOCKER BUILD time, unlike
+# every other tool in this file (uv/poetry/pnpm/task/ripgrep/fd/bat/eza/
+# yq/gh/cosign), which resolve "latest" ONCE in resolve.sh and freeze the
+# result into versions.lock. That inconsistency surfaced for real on
+# 2026-08-28: `npm install -g npm@latest` failed on every matrix leg
+# simultaneously (E404 on an internal @npmcli/* dependency of whatever npm
+# had just published as `latest`) — `with-node` is every profile's shared
+# ancestor, so one bad npm-registry publish broke `final`, `frontend`, and
+# `frontend-e2e` alike, on both platforms. Both packages now resolve
+# through the same versions.lock mechanism as everything else
+# (NPM_VERSION / NPM_BUNDLED_TAR_VERSION) — a future bad npm-registry
+# publish now fails resolve.sh, where it's caught and retried before being
+# baked into a committed lockfile, instead of breaking every subsequent
+# Docker build that consumes an already-working, previously-committed one.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -552,8 +576,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
-    npm install -g npm@latest && \
-    ( cd "$(npm root -g)/npm" && npm install tar@latest --no-save ) && \
+    npm install -g "npm@${NPM_VERSION}" && \
+    ( cd "$(npm root -g)/npm" && npm install "tar@${NPM_BUNDLED_TAR_VERSION}" --no-save ) && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
