@@ -58,6 +58,41 @@ die() {
 }
 
 # ------------------------------------------------------------------------------
+# require_resolved: fail loudly, at the source, instead of silently
+# propagating an empty/null value downstream.
+#
+# ADDED (2026-08-28): resolve_npm_registry(), resolve_npm(), and
+# resolve_github() had no equivalent to the null-guards already present on
+# the Flutter helpers and github_asset_digest() above (see lines checking
+# `!= "null"` further down this file). That gap is exactly what let a
+# missing/malformed versions.yaml key ship a real build failure: yq's `-r`
+# prints the literal string "null" for a path that doesn't resolve to
+# anything, and with no guard that string sailed straight through into
+# versions.lock as NPM_VERSION=null. The Dockerfile then ran
+# `npm install -g npm@null`, which surfaced three build stages later as an
+# opaque npm ETARGET error ("No matching version found for npm@null")
+# instead of failing right here, at lockfile-generation time, with a
+# message naming the exact broken key.
+#
+# Called in two places per resolver: right after the raw versions.yaml
+# lookup (catches a missing/malformed manifest key) and right after an
+# upstream "latest" resolution (catches a broken/empty registry or API
+# response) — the same two failure classes the Flutter-specific guards
+# above already cover, generalized so every resolver gets them instead of
+# only Flutter and GitHub asset digests.
+# ------------------------------------------------------------------------------
+
+require_resolved() {
+
+    local value="$1"
+    local description="$2"
+
+    if [[ -z "$value" || "$value" == "null" ]]; then
+        die "${description} resolved to '${value:-<empty>}' -- check versions.yaml for a missing or malformed key, or an upstream registry/API failure."
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Checks
 # ------------------------------------------------------------------------------
 
@@ -258,10 +293,13 @@ resolve_npm_registry() {
     local version
 
     version=$(yaml "$yaml_path")
+    require_resolved "$version" "versions.yaml key '${yaml_path}' (npm package '${package}')"
 
     if [[ "$version" == "latest" ]]; then
         info "Resolving ${package}@latest from the npm registry..."
-        npm_registry_latest "$package"
+        version=$(npm_registry_latest "$package")
+        require_resolved "$version" "npm registry lookup for '${package}@latest'"
+        printf "%s" "$version"
     else
         printf "%s" "$version"
     fi
@@ -275,10 +313,13 @@ resolve_npm() {
     local version
 
     version=$(yaml "$yaml_path")
+    require_resolved "$version" "versions.yaml key '${yaml_path}' (npm package '${package}')"
 
     if [[ "$version" == "latest" ]]; then
         info "Resolving ${package} (npm)..."
-        npm_latest "$package"
+        version=$(npm_latest "$package")
+        require_resolved "$version" "npm registry lookup for '${package}' latest dist-tag"
+        printf "%s" "$version"
     else
         printf "%s" "$version"
     fi
@@ -368,10 +409,13 @@ resolve_github() {
     local version
 
     version=$(yaml "$yaml_path")
+    require_resolved "$version" "versions.yaml key '${yaml_path}' (GitHub repo '${repo}')"
 
     if [[ "$version" == "latest" ]]; then
         info "Resolving ${repo}..."
-        github_latest "$repo"
+        version=$(github_latest "$repo")
+        require_resolved "$version" "GitHub releases/latest lookup for '${repo}'"
+        printf "%s" "$version"
     else
         printf "%s" "$version"
     fi
