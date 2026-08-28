@@ -1096,7 +1096,7 @@ RUN poetry config virtualenvs.in-project true
 # the runtime user identity.
 # -----------------------------------------------------------------------------
 
-RUN baobab-verify 
+RUN baobab-verify --quiet
 
 HEALTHCHECK \
     --interval=60s \
