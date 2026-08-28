@@ -163,6 +163,7 @@ jobs:
       # any gating `if:` in this file).
       release_tag: ${{ steps.release-context.outputs.release_tag }}
       is_release: ${{ steps.release-context.outputs.is_release }}
+      is_stable_release: ${{ steps.release-context.outputs.is_stable_release }}
       checkout_ref: ${{ steps.release-context.outputs.checkout_ref }}
 
     steps:
@@ -188,6 +189,24 @@ jobs:
           set -euo pipefail
           DISPATCH_TAG="${{ github.event.inputs.tag }}"
 
+          # is_stable_release: true only for a tag with no '-' suffix (e.g.
+          # v1.2.5, not v1.2.5-rc.6) — the SAME boundary already used by
+          # docker/metadata-action's 'latest' tag enable: check below,
+          # computed once here as the single source of truth. Feeds the
+          # release job's prerelease: input — it does NOT gate whether the
+          # release job runs at all. RC tags still get a full GitHub
+          # Release with all pull/cosign commands, same as today; they're
+          # just correctly flagged as a pre-release, which GitHub itself
+          # then automatically excludes from ever being shown as "Latest".
+          is_stable_release() {
+            local tag="$1"
+            if [[ "${tag}" == *-* ]]; then
+              echo "false"
+            else
+              echo "true"
+            fi
+          }
+
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${DISPATCH_TAG}" ]]; then
             if [[ ! "${DISPATCH_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
               echo "::error:: workflow_dispatch 'tag' input '${DISPATCH_TAG}' does not match this workflow's own tag pattern (v*.*.* or v*.*.*-*)."
@@ -196,14 +215,17 @@ jobs:
             echo "::notice:: Rebuilding existing tag '${DISPATCH_TAG}' via workflow_dispatch — this run will check out that tag and publish/release exactly as a real tag push would."
             echo "release_tag=${DISPATCH_TAG}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "is_stable_release=$(is_stable_release "${DISPATCH_TAG}")" >> "$GITHUB_OUTPUT"
             echo "checkout_ref=${DISPATCH_TAG}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ startsWith(github.ref, 'refs/tags/') }}" == "true" ]]; then
             echo "release_tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "is_stable_release=$(is_stable_release "${{ github.ref_name }}")" >> "$GITHUB_OUTPUT"
             echo "checkout_ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           else
             echo "release_tag=" >> "$GITHUB_OUTPUT"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "is_stable_release=false" >> "$GITHUB_OUTPUT"
             echo "checkout_ref=${{ github.event.pull_request.head.ref || github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -1583,6 +1605,7 @@ jobs:
         with:
           tag_name: ${{ needs.sanity-check.outputs.release_tag }}
           draft: true
+          prerelease: ${{ needs.sanity-check.outputs.is_stable_release != 'true' }}
           files: config/versions.lock
           generate_release_notes: true
           body_path: ${{ steps.release-body.outputs.path }}
