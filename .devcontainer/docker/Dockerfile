@@ -476,12 +476,23 @@ RUN rm -f /usr/bin/pebble && rm -rf /var/lib/pebble
 # config/resolve.sh itself is installed alongside it for reference/tooling
 # parity (e.g. re-running version resolution from inside a running
 # container), but is never invoked as part of this build.
+#
+# scripts/npm-install-retry.sh is installed here too, for a different
+# reason: it needs to be SOURCED (not just present for reference) by every
+# downstream stage's RUN instruction that installs an npm-registry package
+# (with-node's npm/tar, frontend's turbo, frontend-e2e's
+# playwright/sharp/lighthouse) — see that file's own header for the
+# incident history that made this necessary. `base` is the shared ancestor
+# all of those stages descend from, so installing it once here, at a fixed
+# path under BAOBAB_CONFIG_DIR, means every call site sources the exact
+# same function definition rather than three drifting inline copies of it.
 # -----------------------------------------------------------------------------
 RUN mkdir -p /usr/local/share/baobab/config
 
 COPY config/versions.yaml /usr/local/share/baobab/config/versions.yaml
 COPY config/versions.lock /usr/local/share/baobab/config/versions.lock
 COPY --chmod=0755 config/resolve.sh /usr/local/share/baobab/config/resolve.sh
+COPY --chmod=0755 scripts/npm-install-retry.sh /usr/local/share/baobab/config/npm-install-retry.sh
 
 ENV BAOBAB_CONFIG_DIR=/usr/local/share/baobab/config
 
@@ -594,32 +605,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     \
-    # Bounded exponential-backoff retry for `npm install`, scoped
-    # narrowly to the two npm-registry-published packages below (npm
-    # itself, and its bundled tar) — not corepack/apt-get, which are a
-    # different failure class and weren't implicated in either incident.
-    # Same algorithm as scripts/cosign-retry.sh's backoff_sleep (capped
-    # exponential backoff, equal jitter): delay = min(base * 2^(n-1), max),
-    # then half fixed + half random so retries don't synchronize. \
-    npm_install_retry() { \
-        local attempts=5 base_delay=15 max_delay=120 attempt=1 delay half jitter; \
-        local label="npm install $*"; \
-        until npm install "$@"; do \
-            if (( attempt >= attempts )); then \
-                echo "npm_install_retry: all ${attempts} attempts failed for: ${label}" >&2; \
-                return 1; \
-            fi; \
-            delay=$(( base_delay * (1 << (attempt - 1)) )); \
-            (( delay > max_delay )) && delay="${max_delay}"; \
-            half=$(( delay / 2 )); \
-            jitter=$(( RANDOM % (half + 1) )); \
-            delay=$(( half + jitter )); \
-            echo "npm_install_retry: attempt ${attempt}/${attempts} failed for: ${label} -- retrying in ${delay}s (likely npm-registry CDN propagation lag on a freshly-published version; see Dockerfile CHANGE LOG 2026-08-28)." >&2; \
-            sleep "${delay}"; \
-            attempt=$(( attempt + 1 )); \
-        done; \
-    }; \
-    \
+    # npm_install_retry() wraps the two npm-registry-published installs
+    # below (npm itself, and its bundled tar) with bounded exponential
+    # backoff — not corepack/apt-get, which are a different failure class
+    # and weren't implicated in either incident. Sourced from a shared
+    # file (installed in `base`, above) rather than defined inline here,
+    # since `frontend` and `frontend-e2e` further down this file need the
+    # identical function for their own npm-registry installs (turbo;
+    # playwright/sharp/lighthouse) and each RUN instruction is its own
+    # shell with no memory of a previous RUN's function definitions — see
+    # scripts/npm-install-retry.sh for the full incident history and the
+    # backoff algorithm (identical to scripts/cosign-retry.sh's). \
+    . "${BAOBAB_CONFIG_DIR}/npm-install-retry.sh" && \
     npm_install_retry -g "npm@${NPM_VERSION}" && \
     ( cd "$(npm root -g)/npm" && npm_install_retry "tar@${NPM_BUNDLED_TAR_VERSION}" --no-save ) && \
     corepack enable && \
@@ -652,11 +649,18 @@ ARG REVISION
 # Turborepo — npm-sourced, resolved the same way pnpm is (no compiled
 # per-architecture binary the way ripgrep/task/uv/gh/cosign have; npm's own
 # install-time integrity checking is the verification mechanism here).
+#
+# npm_install_retry (see with-node's equivalent comment and
+# scripts/npm-install-retry.sh for the incident history) — this is an
+# npm-registry-published package install of exactly the same kind that
+# already broke twice for npm itself, so it gets the same bounded-backoff
+# wrapper rather than waiting for it to fail here too before hardening it.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
-    npm install -g "turbo@${TURBO_VERSION}"
+    . "${BAOBAB_CONFIG_DIR}/npm-install-retry.sh" && \
+    npm_install_retry -g "turbo@${TURBO_VERSION}"
 
 # fzf, tmux, bash-completion, GitHub CLI + a SUBSET of cli-tools' checksummed
 # binaries — same source and verification as `final`'s equivalent block,
@@ -764,11 +768,21 @@ FROM frontend AS frontend-e2e
 
 USER root
 
+# npm_install_retry wraps the `npm install -g` below (three
+# npm-registry-published packages in one call — the same install class
+# that already broke twice for npm itself; see with-node's equivalent
+# comment and scripts/npm-install-retry.sh). Deliberately NOT extended to
+# `npx playwright install --with-deps` on the next line — that downloads
+# browser binaries from Playwright's own CDN, a different service with a
+# different failure mode, already flagged above (see this stage's own
+# header comment) as its own future hardening cycle rather than something
+# observed failing; wrapping it here would be pre-emptive, not root-caused.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
     . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
-    npm install -g \
+    . "${BAOBAB_CONFIG_DIR}/npm-install-retry.sh" && \
+    npm_install_retry -g \
         "playwright@${PLAYWRIGHT_VERSION}" \
         "sharp@${SHARP_VERSION}" \
         "lighthouse@${LIGHTHOUSE_VERSION}" && \
