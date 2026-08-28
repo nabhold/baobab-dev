@@ -71,6 +71,18 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * Fixed the bundled-tar upgrade in `with-node`: `npm install "tar@X"
+#   --no-save` was run inside `$(npm root -g)/npm` so npm's arborist would
+#   reify THAT PROJECT's own devDependencies too, including
+#   `@npmcli/docs` (npm's internal name for its `docs` workspace, never
+#   published to the public registry) -- a deterministic, 100%-reproducible
+#   E404, not the transient propagation-lag class the retry wrapper below
+#   was built for (confirmed: the wrapper exhausted all 5 attempts every
+#   time, and `--omit=dev`/`--no-workspaces`/`--package-lock=false` don't
+#   avoid it either). Fixed by installing tar into a disposable scratch
+#   project instead and copying only its node_modules/tar over npm's
+#   bundled copy, so npm's own package.json is never read as an install
+#   target. See the `with-node` stage's third CORRECTION comment.
 # * Pinned npm and its bundled tar dependency to resolved versions
 #   (NPM_VERSION / NPM_BUNDLED_TAR_VERSION) instead of floating `@latest`
 #   at Docker build time — an upstream npm-registry publish incident
@@ -591,6 +603,33 @@ FROM base AS with-node
 # jitter), reimplemented inline below rather than invoked as that script,
 # since a Dockerfile RUN step can't exec a host script that hasn't been
 # COPYed into the image at this point in the build.
+#
+# CORRECTION (2026-08-28, third pass): the retry wrapper landed, was
+# confirmed active in CI (visible backoff attempts), and still failed
+# every one of its 5 attempts on the tar install specifically, always on
+# the exact same package: `@npmcli/docs`. That was the tell that this was
+# never actually a propagation-lag retry candidate at all. Reproduced
+# deterministically outside CI (no flakiness, 100% of the time): `cd
+# "$(npm root -g)/npm" && npm install "tar@X" --no-save` runs npm's
+# arborist against npm's OWN package.json in that directory, which
+# declares `@npmcli/docs` as a devDependency (it's the name npm's
+# monorepo uses internally for its `docs` workspace member). The
+# published npm tarball ships `docs/` as prebuilt static content with no
+# package.json in it, so there is nothing for npm's workspace-linking to
+# resolve locally, and `@npmcli/docs` is not, and was never meant to be,
+# an installable package on the public registry (confirmed: a plain `GET
+# /@npmcli%2fdocs` 404s permanently, independent of any specific
+# version). Every retry was therefore guaranteed to fail identically no
+# matter how long the backoff — `--omit=dev`, `--no-workspaces`, and
+# `--package-lock=false` (individually and combined) do NOT avoid it, so
+# the only real fix is to stop running `npm install` inside npm's own
+# package directory at all. Below, the target tar version is installed
+# into a disposable scratch project instead (a fresh empty directory with
+# its own minimal package.json, uninvolved in npm's devDependency/
+# workspaces tree), and only the resulting node_modules/tar is copied
+# over npm's bundled copy. npm_install_retry still wraps that isolated
+# install, since a genuine registry propagation-lag on the tar package
+# itself remains possible and is a separate, legitimate retry case.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -618,7 +657,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     # backoff algorithm (identical to scripts/cosign-retry.sh's). \
     . "${BAOBAB_CONFIG_DIR}/npm-install-retry.sh" && \
     npm_install_retry -g "npm@${NPM_VERSION}" && \
-    ( cd "$(npm root -g)/npm" && npm_install_retry "tar@${NPM_BUNDLED_TAR_VERSION}" --no-save ) && \
+    ( \
+        NPM_GLOBAL_ROOT="$(npm root -g)" && \
+        TAR_SCRATCH_DIR="$(mktemp -d)" && \
+        cd "${TAR_SCRATCH_DIR}" && \
+        npm init -y --silent >/dev/null && \
+        npm_install_retry "tar@${NPM_BUNDLED_TAR_VERSION}" --no-save --omit=dev && \
+        rm -rf "${NPM_GLOBAL_ROOT}/npm/node_modules/tar" && \
+        cp -r node_modules/tar "${NPM_GLOBAL_ROOT}/npm/node_modules/tar" && \
+        rm -rf "${TAR_SCRATCH_DIR}" \
+    ) && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
