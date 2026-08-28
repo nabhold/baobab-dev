@@ -680,11 +680,28 @@ jobs:
       # this would pull every other target's digests into the same merge,
       # producing a manifest that mixed layers from different Dockerfile
       # stages under one tag.
+      # FIX: 'digests-${{ matrix.target }}-*' over-matched — for
+      # matrix.target == frontend, that glob ALSO matched
+      # 'digests-frontend-e2e-amd64'/'-arm64' as a prefix, pulling
+      # frontend-e2e's per-arch digests into frontend's merge. Confirmed
+      # live (v1.2.5-rc.3): 4 artifacts downloaded instead of 2, which fed
+      # 4 source indices (8 children after --flatten) into "Publish
+      # multi-architecture OCI manifest" below instead of 2 (4 children) —
+      # visible in that step's "existing manifest:" line count. The
+      # resulting index held two linux/amd64 image manifests, so the
+      # provenance-extraction step's single-result jq lookup for amd64
+      # silently returned multiple/no match, misreported as "missing
+      # attestation manifest for linux/amd64" on every retry. Listing both
+      # exact per-platform artifact names (no trailing wildcard) prevents
+      # any target from prefix-matching another target's artifacts, now or
+      # if a future target name creates the same collision.
       - name: Download digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-${{ matrix.target }}-*
+          pattern: |
+            digests-${{ matrix.target }}-amd64
+            digests-${{ matrix.target }}-arm64
           merge-multiple: true
 
       # ------------------------------------------------------------------
