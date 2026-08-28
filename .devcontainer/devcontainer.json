@@ -63,17 +63,22 @@
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "moby": false,
       "dockerDashComposeVersion": "v2"
-    },
-    "ghcr.io/devcontainers/features/python:1": {},
-    "ghcr.io/devcontainers/features/homebrew:1": {
-        "packages": ["crane"]
-    },
-    "ghcr.io/astral-sh/devcontainer-features/uv:1": {}
+    }
     // github-cli intentionally NOT declared here: `gh` ships in the image
     // via apt already; re-declaring would add provisioning time and risk
     // an unpinned `gh` version diverging from config/versions.lock.
   },
 
+  // Task 1.4 (baobab-dev-v1_1_0-release-plan-amended.md): the `final` build
+  // target now also carries this exact port set via a `devcontainer.metadata`
+  // LABEL on the image itself (see Dockerfile's `final` stage) — this file
+  // is no longer the ONLY place ports are declared, but it remains the
+  // authoritative, human-editable REFERENCE for what a real consumer's own
+  // devcontainer.json should look like (kept here permanently as this repo's
+  // dogfood/reference config, per architecture decision — not removed).
+  // Per the Dev Container Spec's merge rules, forwardPorts UNIONs across
+  // both sources rather than one overriding the other, so this duplication
+  // is intentional and harmless — the two are meant to be kept identical.
   "forwardPorts": [8000, 8001, 3000, 5432, 6379, 9000, 9001, 80, 443],
 
   // Explicit labels/visibility per service. All private by default so
@@ -111,7 +116,7 @@
 
   "customizations": {
     "codespaces": {
-      "openFiles": ["README.md", "docker-compose.yml"] 
+      "openFiles": ["README.md", "docker-compose.yml"]
     },
     "vscode": {
       "extensions": [

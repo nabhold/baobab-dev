@@ -14,14 +14,61 @@ alias h='history'
 
 # Django / BAOBAB shortcuts
 alias dj='python manage.py'
-alias djrun='python manage.py runserver 0.0.0.0:8000'
 alias djmig='python manage.py makemigrations && python manage.py migrate'
-alias djtenant='python manage.py migrate_schemas'
 alias djshell='python manage.py shell'
 
+# -----------------------------------------------------------------------------
+# Deprecation warnings — baobab-dev v1.1.0 task 1.5. djrun, djtenant,
+# celeryworker, and celerybeat are Baobab-app-specific (unlike dj/djmig/
+# djshell above, which are generic Django-CLI conventions, not tied to
+# Baobab's own manage.py setup) and will move to the baobab repo itself in
+# baobab-dev v2.0.0 (see baobab-dev-v2_0_0-release-plan.md task 2.2). They
+# remain FULLY FUNCTIONAL here — this is a warning only, no removal, no
+# change to the command each one actually runs.
+#
+# Implemented as functions rather than plain `alias` because a plain alias
+# is pure text substitution with no way to run logic (like a one-time
+# warning check) before the substituted command executes. Each guards on
+# its own env var so the warning fires once per interactive shell session
+# — not on every invocation — regardless of how many times this file itself
+# gets sourced within that session.
+# -----------------------------------------------------------------------------
+_baobab_deprecated_alias_warning() {
+    echo "[baobab-dev] '$1' is a Baobab-app-specific alias and will move to the baobab repo in baobab-dev v2.0.0. See docs/environment-contract.md#alias-migration for details." >&2
+}
+
+djrun() {
+    if [[ -z "${_BAOBAB_WARNED_DJRUN:-}" ]]; then
+        _baobab_deprecated_alias_warning "djrun"
+        export _BAOBAB_WARNED_DJRUN=1
+    fi
+    python manage.py runserver 0.0.0.0:8000 "$@"
+}
+
+djtenant() {
+    if [[ -z "${_BAOBAB_WARNED_DJTENANT:-}" ]]; then
+        _baobab_deprecated_alias_warning "djtenant"
+        export _BAOBAB_WARNED_DJTENANT=1
+    fi
+    python manage.py migrate_schemas "$@"
+}
+
 # Celery
-alias celeryworker='celery -A config worker -l info'
-alias celerybeat='celery -A config beat -l info'
+celeryworker() {
+    if [[ -z "${_BAOBAB_WARNED_CELERYWORKER:-}" ]]; then
+        _baobab_deprecated_alias_warning "celeryworker"
+        export _BAOBAB_WARNED_CELERYWORKER=1
+    fi
+    celery -A config worker -l info "$@"
+}
+
+celerybeat() {
+    if [[ -z "${_BAOBAB_WARNED_CELERYBEAT:-}" ]]; then
+        _baobab_deprecated_alias_warning "celerybeat"
+        export _BAOBAB_WARNED_CELERYBEAT=1
+    fi
+    celery -A config beat -l info "$@"
+}
 
 # Docker Compose
 alias dc='docker compose'

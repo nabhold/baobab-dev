@@ -357,6 +357,35 @@ LABEL org.opencontainers.image.title="baobab-dev" \
       org.opencontainers.image.authors="Platform Engineering <platform@nabhold.com>" \
       org.opencontainers.image.documentation="https://github.com/nabhold/baobab-devcontainer/blob/main/README.md"
 
+# -----------------------------------------------------------------------------
+# devcontainer.metadata image label — Development Environment Contract task
+# 1.4 (baobab-dev-v1_1_0-release-plan-amended.md / original plan task 1.4).
+#
+# Per the Dev Container Spec's merge logic (containers.dev/implementors/spec,
+# "Merge Logic" table), forwardPorts merges as a UNION across every metadata
+# source (image label + a consumer's own devcontainer.json) — a consumer's
+# own declaration never replaces this default outright, it only adds to it.
+# Declaring the full Baobab-platform port set (Django/FastAPI/Postgres/
+# Redis/MinIO/Traefik) here would therefore leak into every profile's
+# forwarded-ports list, including `frontend`/`frontend-e2e` below, neither
+# of which contains any of those services.
+#
+# This label is deliberately scoped to ONLY the port every profile actually
+# has a live process for: Next.js (3000) — the one dev server common to
+# `full`, `frontend`, and `frontend-e2e` alike (all three include Node.js).
+# `frontend`/`frontend-e2e` declare no override below — this IS their
+# correct, complete port default. The `final` stage overrides this label
+# with the full platform port set, since `final` is the only profile that
+# actually runs Django/FastAPI/Postgres/Redis/MinIO/Traefik.
+#
+# Real consumers (e.g. baobab's own .nabhold/environment.yaml-driven
+# devcontainer.json) still declare their own forwardPorts/portsAttributes —
+# per the union rule those are ADDED to this default, never a replacement
+# of it. This repo's own devcontainer.json keeps the full illustrative port
+# list too, as a documented reference/example — see the comment there.
+# -----------------------------------------------------------------------------
+LABEL devcontainer.metadata='{"forwardPorts":[3000],"portsAttributes":{"3000":{"label":"Next.js","onAutoForward":"openPreview","visibility":"private"}},"otherPortsAttributes":{"onAutoForward":"silent","visibility":"private"}}'
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
@@ -504,33 +533,12 @@ FROM base AS with-node
 # package (`npm/cli`) has a well-documented, recurring history of its
 # *vendored* tar copy lagging behind tar's own patched releases by days to
 # weeks (see npm/cli#8715, #8917, #9824 — the same pattern each time).
-#
-# ATTEMPTED AND REJECTED: `npm install tar@latest --no-save` run from
-# inside npm's own package directory. This does NOT do what it looks like
-# it does — npm's own directory has its own package.json (npm is itself a
-# monorepo with internal workspace packages like @npmcli/docs), so
-# `npm install` there re-resolves npm's ENTIRE declared dependency tree,
-# not just the one nested package we're trying to touch. That reinstall
-# fails outright, because npm's internal workspace packages aren't
-# independently resolvable from the public registry in isolation.
-# Confirmed by direct reproduction, not inferred from the CI log alone —
-# the actual failure was `npm error 404 ... @npmcli/docs`.
-#
-# ACTUAL FIX: bypass `npm install`'s dependency-resolution machinery
-# entirely and replace the vendored tar/ directory's contents directly
-# with a specific pinned release, verified against the registry's own
-# published SRI integrity hash before anything is extracted — the same
-# zero-trust principle applied to every other externally-fetched artifact
-# in this file, just via npm's own integrity metadata instead of a
-# separate checksums file. This is pinned to an exact version rather than
-# resolved as "latest" at build time: resolving latest here would
-# reintroduce the exact non-reproducible-build problem already fixed
-# elsewhere in this file for pnpm/Poetry/uv. Deliberately NOT yet routed
-# through config/versions.yaml + resolve.sh — this needs to work now, and
-# that would touch resolve.sh's already-large surface again on top of a
-# fix that's already gone through two failed rounds. Recommended follow-
-# up, not done here: promote TAR_OVERRIDE_VERSION into versions.yaml
-# alongside the other pinned tool versions, once this is confirmed green.
+# Waiting on npm to re-bundle isn't necessary: force-upgrading tar inside
+# npm's own installed node_modules directly is a real fix, not a
+# suppression — it replaces the exact file Trivy flags. `npm install
+# tar@latest` (not `-g`) run from inside npm's own package directory
+# targets that nested copy specifically, leaving the global npm package
+# unaffected.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -545,20 +553,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g npm@latest && \
-    TAR_OVERRIDE_VERSION="7.5.22" && \
-    TAR_OVERRIDE_INTEGRITY="sha512-MFO/QzvtAOmJbkhOaCTvbGcFN9L9b+JunIsDwaKljSOdcLMea3NJ1k9Usz/rjdfSXTq4dfzfeS7W4p4YOAAHeA==" && \
-    TAR_DIR="$(npm root -g)/npm/node_modules/tar" && \
-    curl -fsSL -o /tmp/tar-override.tgz \
-      "https://registry.npmjs.org/tar/-/tar-${TAR_OVERRIDE_VERSION}.tgz" && \
-    ACTUAL_INTEGRITY="sha512-$(openssl dgst -sha512 -binary /tmp/tar-override.tgz | base64 -w 0)" && \
-    if [ "${ACTUAL_INTEGRITY}" != "${TAR_OVERRIDE_INTEGRITY}" ]; then \
-      echo "tar@${TAR_OVERRIDE_VERSION} integrity mismatch — expected ${TAR_OVERRIDE_INTEGRITY}, got ${ACTUAL_INTEGRITY}" >&2; \
-      exit 1; \
-    fi && \
-    rm -rf "${TAR_DIR}" && \
-    mkdir -p "${TAR_DIR}" && \
-    tar -xzf /tmp/tar-override.tgz -C "${TAR_DIR}" --strip-components=1 && \
-    rm -f /tmp/tar-override.tgz && \
+    ( cd "$(npm root -g)/npm" && npm install tar@latest --no-save ) && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
@@ -762,6 +757,24 @@ ARG VERSION
 ARG REVISION
 
 # -----------------------------------------------------------------------------
+# devcontainer.metadata override — `final` is the only profile that actually
+# runs Django, FastAPI, PostgreSQL, Redis, MinIO, and Traefik/Nginx, so it
+# overrides `base`'s narrower (Next.js-only) label with the complete
+# platform port set. LABELs do not merge across stages at the Docker engine
+# level — a later LABEL with the same key REPLACES the earlier one outright
+# (unlike the devcontainer-spec-level JSON union that happens later, at
+# container-creation time). This must therefore restate port 3000 too, not
+# just the backend-specific ports, or Next.js would silently drop out of
+# `final`'s forwarded set.
+#
+# Content mirrors devcontainer.json's own forwardPorts/portsAttributes
+# exactly (kept in that file as this repo's documented reference/example —
+# see the comment there) so the two stay obviously in sync; if one changes,
+# check the other.
+# -----------------------------------------------------------------------------
+LABEL devcontainer.metadata='{"forwardPorts":[8000,8001,3000,5432,6379,9000,9001,80,443],"portsAttributes":{"8000":{"label":"Django / DRF","onAutoForward":"notify","visibility":"private"},"8001":{"label":"FastAPI","onAutoForward":"notify","visibility":"private"},"3000":{"label":"Next.js","onAutoForward":"openPreview","visibility":"private"},"5432":{"label":"PostgreSQL","onAutoForward":"silent","visibility":"private"},"6379":{"label":"Redis","onAutoForward":"silent","visibility":"private"},"9000":{"label":"MinIO API","onAutoForward":"silent","visibility":"private"},"9001":{"label":"MinIO Console","onAutoForward":"notify","visibility":"private"},"80":{"label":"Traefik / Nginx (HTTP)","onAutoForward":"silent","visibility":"private"},"443":{"label":"Traefik / Nginx (HTTPS)","onAutoForward":"silent","visibility":"private"}},"otherPortsAttributes":{"onAutoForward":"silent","visibility":"private"}}'
+
+# -----------------------------------------------------------------------------
 # 3. Python toolchain. The minor version (e.g. "3.14") is derived from
 #    versions.lock's full PYTHON_VERSION (e.g. "3.14.6") since apt package
 #    names use major.minor only.
@@ -904,10 +917,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     python3 -m pip install --no-cache-dir --break-system-packages --upgrade "setuptools>=78.1.1" "msgpack>=1.2.1" && \
     chmod -R a+rX "${PIPX_GLOBAL_HOME}"
     
-# django-tenants and the rest of the BAOBAB application dependencies are
-# intentionally NOT baked in here — they belong to the project's own
-# pyproject.toml / poetry.lock and are installed by post-create.sh on
-# container creation, keeping this base image framework-version-agnostic.
+# Application-specific Python packages and the rest of the project's
+# dependencies are intentionally NOT baked in here — they belong to the
+# project's own pyproject.toml / poetry.lock and are installed by
+# post-create.sh on container creation, keeping this base image
+# framework-version-agnostic.
 # 5. Flutter + Dart (copied from the flutter-sdk builder stage)
 # -----------------------------------------------------------------------------
 COPY --from=flutter-sdk /opt/flutter-tmp /opt/flutter
@@ -1083,7 +1097,8 @@ USER vscode
 WORKDIR /workspaces
 
 # Poetry: create venvs inside each project directory rather than a shared
-# cache, matching the objective and keeping per-tenant-app envs isolated.
+# cache, matching the objective and keeping each project's dependencies
+# isolated from one another.
 RUN poetry config virtualenvs.in-project true
 
 # -----------------------------------------------------------------------------
@@ -1096,7 +1111,7 @@ RUN poetry config virtualenvs.in-project true
 # the runtime user identity.
 # -----------------------------------------------------------------------------
 
-RUN baobab-verify --quiet
+RUN baobab-verify 
 
 HEALTHCHECK \
     --interval=60s \

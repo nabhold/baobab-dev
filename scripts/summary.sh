@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # summary.sh  (installed in the image as: baobab-summary)
-# 
-# File: scripts/summary.sh
-# 
+#
 # Displays a concise overview of the BAOBAB development environment.
 #
 # Safe to execute at any time. All lookups are best-effort and the script never
@@ -156,10 +154,10 @@ detect "requirements.txt"        "Python project (requirements.txt)"
 detect "package.json"            "Node.js project"
 detect "pubspec.yaml"            "Flutter project"
 
-detect "backend"                 "Backend directory"
-detect "frontend"                "Frontend directory"
-detect "mobile"                  "Mobile application"
-detect "services"                "Services directory"
+detect "backend"                 "Directory: backend"
+detect "frontend"                "Directory: frontend"
+detect "mobile"                  "Directory: mobile"
+detect "services"                "Directory: services"
 
 detect "compose.yaml"            "Docker Compose configuration"
 detect "docker-compose.yml"      "Docker Compose configuration"
