@@ -559,10 +559,27 @@ FROM base AS with-node
 # ancestor, so one bad npm-registry publish broke `final`, `frontend`, and
 # `frontend-e2e` alike, on both platforms. Both packages now resolve
 # through the same versions.lock mechanism as everything else
-# (NPM_VERSION / NPM_BUNDLED_TAR_VERSION) — a future bad npm-registry
-# publish now fails resolve.sh, where it's caught and retried before being
-# baked into a committed lockfile, instead of breaking every subsequent
-# Docker build that consumes an already-working, previously-committed one.
+# (NPM_VERSION / NPM_BUNDLED_TAR_VERSION).
+#
+# CORRECTION (2026-08-28, later the same day): the paragraph above claimed
+# a future bad npm-registry publish would "fail resolve.sh, where it's
+# caught and retried." That never actually existed as retry logic, and the
+# mental model behind it was wrong besides — proven by a second incident
+# the same day. resolve.sh's npm_registry_latest() only reads the *version
+# number* off npm's `/latest` dist-tag endpoint; that lookup succeeded
+# here and correctly froze a real, existing NPM_VERSION into
+# versions.lock. The failure was one level down: `npm install -g
+# npm@${NPM_VERSION}` still hit E404 on `@npmcli/docs`, a scoped internal
+# dependency of that exact version that hadn't finished propagating across
+# the npm registry's CDN yet. Retrying resolve.sh's lookup would not have
+# helped — "latest" keeps pointing at the same not-yet-fully-propagated
+# release regardless of how many times you re-resolve it. The fix has to
+# retry the INSTALL itself, with backoff, so the registry has time to
+# catch up — same principle scripts/cosign-retry.sh already established
+# for Rekor flakiness (bounded attempts, capped exponential backoff with
+# jitter), reimplemented inline below rather than invoked as that script,
+# since a Dockerfile RUN step can't exec a host script that hasn't been
+# COPYed into the image at this point in the build.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     --mount=type=cache,target=/root/.npm,sharing=locked \
@@ -576,8 +593,35 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
-    npm install -g "npm@${NPM_VERSION}" && \
-    ( cd "$(npm root -g)/npm" && npm install "tar@${NPM_BUNDLED_TAR_VERSION}" --no-save ) && \
+    \
+    # Bounded exponential-backoff retry for `npm install`, scoped
+    # narrowly to the two npm-registry-published packages below (npm
+    # itself, and its bundled tar) — not corepack/apt-get, which are a
+    # different failure class and weren't implicated in either incident.
+    # Same algorithm as scripts/cosign-retry.sh's backoff_sleep (capped
+    # exponential backoff, equal jitter): delay = min(base * 2^(n-1), max),
+    # then half fixed + half random so retries don't synchronize. \
+    npm_install_retry() { \
+        local attempts=5 base_delay=15 max_delay=120 attempt=1 delay half jitter; \
+        local label="npm install $*"; \
+        until npm install "$@"; do \
+            if (( attempt >= attempts )); then \
+                echo "npm_install_retry: all ${attempts} attempts failed for: ${label}" >&2; \
+                return 1; \
+            fi; \
+            delay=$(( base_delay * (1 << (attempt - 1)) )); \
+            (( delay > max_delay )) && delay="${max_delay}"; \
+            half=$(( delay / 2 )); \
+            jitter=$(( RANDOM % (half + 1) )); \
+            delay=$(( half + jitter )); \
+            echo "npm_install_retry: attempt ${attempt}/${attempts} failed for: ${label} -- retrying in ${delay}s (likely npm-registry CDN propagation lag on a freshly-published version; see Dockerfile CHANGE LOG 2026-08-28)." >&2; \
+            sleep "${delay}"; \
+            attempt=$(( attempt + 1 )); \
+        done; \
+    }; \
+    \
+    npm_install_retry -g "npm@${NPM_VERSION}" && \
+    ( cd "$(npm root -g)/npm" && npm_install_retry "tar@${NPM_BUNDLED_TAR_VERSION}" --no-save ) && \
     corepack enable && \
     corepack prepare "pnpm@${PNPM_VERSION}" --activate && \
     corepack prepare yarn@stable --activate
