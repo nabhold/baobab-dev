@@ -1,0 +1,22 @@
+schema:
+  name: "nabhold-development-environment-contract"
+  version: "1.0"
+application:
+  name: "baobab-dev"
+  version: "1.2.6"
+environment:
+  provider: "baobab-dev"
+  profile: "full"
+  minimum_version: "1.2.6"
+  contract_minimum_version: "1.0"
+compatibility_policy:
+  strict_runtime_versions: true
+  allow_newer_patch_versions: true
+  allow_newer_minor_versions: false
+  allow_older_versions: false
+validation:
+  required_capabilities:
+    - "development.docker"
+    - "development.github_cli"
+notes:
+  - "The development-image repository dogfoods its published v1.2.6 full profile."

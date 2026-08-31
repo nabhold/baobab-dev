@@ -1,0 +1,6 @@
+* @nabhold/platform-engineering
+/.github/ @nabhold/platform-engineering @nabhold/security
+/.devcontainer/ @nabhold/platform-engineering
+/.nabhold/ @nabhold/platform-engineering
+/Dockerfile @nabhold/platform-engineering @nabhold/security
+/SECURITY.md @nabhold/security

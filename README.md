@@ -9,9 +9,9 @@
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?logo=docker\&logoColor=white)](https://www.docker.com/)
 [![Dev Containers](https://img.shields.io/badge/Dev%20Containers-Supported-007ACC?logo=visualstudiocode\&logoColor=white)](https://containers.dev/)
 [![GitHub Codespaces](https://img.shields.io/badge/GitHub-Codespaces-181717?logo=github\&logoColor=white)](https://github.com/features/codespaces)
-[![Build Status](https://github.com/nabhold/baobab-devcontainer/actions/workflows/publish.yml/badge.svg)](https://github.com/nabhold/baobab-devcontainer/actions/workflows/publish.yml)
-[![Latest Release](https://img.shields.io/github/v/release/nabhold/baobab-devcontainer?label=Release)](https://github.com/nabhold/baobab-devcontainer/releases)
-[![Container Registry](https://img.shields.io/badge/GitHub%20Container%20Registry-GHCR-2ea44f?logo=github)](https://github.com/nabhold/baobab-devcontainer/pkgs/container/baobab-devcontainer)
+[![Build Status](https://github.com/nabhold/baobab-dev/actions/workflows/publish.yml/badge.svg)](https://github.com/nabhold/baobab-dev/actions/workflows/publish.yml)
+[![Latest Release](https://img.shields.io/github/v/release/nabhold/baobab-dev?label=Release)](https://github.com/nabhold/baobab-dev/releases)
+[![Container Registry](https://img.shields.io/badge/GitHub%20Container%20Registry-GHCR-2ea44f?logo=github)](https://github.com/nabhold/baobab-dev/pkgs/container/baobab-dev)
 [![Platform](https://img.shields.io/badge/platform-linux%2Famd64%20%7C%20linux%2Farm64-success)](#supported-platforms)
 
 The **BAOBAB Development Container** provides a deterministic, version-controlled, and enterprise-ready development environment for the **BAOBAB Enterprise Platform**. It enables developers to work from an identical software stack whether using local Docker, Visual Studio Code Dev Containers, GitHub Codespaces, or Continuous Integration (CI) pipelines.
@@ -44,8 +44,8 @@ The result is a development platform that is predictable, maintainable, and scal
 Clone the repository:
 
 ```bash
-git clone https://github.com/nabhold/baobab-devcontainer.git
-cd baobab-devcontainer
+git clone https://github.com/nabhold/baobab-dev.git
+cd baobab-dev
 ```
 
 Open the repository in your preferred development environment:
@@ -58,7 +58,7 @@ Detailed setup instructions are available in the **Usage** section of this docum
 
 ---
 
-📖 **Documentation:** https://nabhold.github.io/baobab-devcontainer/
+📖 **Documentation:** https://nabhold.github.io/baobab-dev/
 
 This repository follows a documentation-first approach.
 
@@ -118,3 +118,9 @@ The `docs/` directory is designed to be published through **GitHub Pages**, maki
 * Support *(coming soon)*
 * [Changelog](CHANGELOG.md)
 * Acknowledgements *(coming soon)*
+
+## Foundation 4
+
+This repository dogfoods `ghcr.io/nabhold/baobab-dev:1.2.6`. Its SHA-pinned
+Foundation gate validates the environment contract and scans both source and
+the development-container build. Consumers must pin v1.2.6 profiles explicitly.

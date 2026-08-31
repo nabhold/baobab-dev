@@ -9,7 +9,7 @@
 #   • a bare `docker run`
 #   • a GitHub Actions self-hosted runner
 #   • a developer re-running onboarding manually
-#   • a local clone of the baobab-devcontainer repository
+#   • a local clone of the baobab-dev repository
 #
 # This complements (does not replace) scripts/post-create.sh:
 #
