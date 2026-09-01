@@ -27,7 +27,7 @@ item count changed, so "2 rows" specifically no longer holds, but the
 
 **2. Django/DRF/FastAPI/Next.js/Celery/MinIO — added.**
 Confirmed. Since `versions.yaml` doesn't pin these (they belong to the
-sibling `nabhold/baobab` repo per your note), I split the tech strip
+  sibling Baobab engine repositories), I split the tech strip
 into two labeled groups rather than one undifferentiated list:
 
 - *"Development environment (pinned in config/versions.yaml)"* — the

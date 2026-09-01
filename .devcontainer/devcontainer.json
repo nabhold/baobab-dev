@@ -1,16 +1,16 @@
 {
   "name": "Baobab Enterprise Platform",
 
-  // Pinned to v1.0.0 (not :latest) for deterministic, reproducible parity
+  // Pinned to v1.2.6 (not :latest) for deterministic, reproducible parity
   // with config/versions.lock across all workstations and CI. Published by
   // .github/workflows/publish.yml after Cosign sign/attest + Trivy gate.
   // NOTE: GHCR does not enforce tag immutability server-side — this tag is
   // "immutable" only by this repo's release policy. For registry-enforced
   // immutability, pin by digest instead/in addition:
-  //   "image": "ghcr.io/nabhold/baobab-dev:1.0.0@sha256:<digest>"
-  // (get <digest> from the v1.0.0 GitHub Release notes, or
-  // `docker buildx imagetools inspect ghcr.io/nabhold/baobab-dev:1.0.0`).
-  "image": "ghcr.io/nabhold/baobab-dev:1.0.0",
+  //   "image": "ghcr.io/nabhold/baobab-dev:1.2.6@sha256:<digest>"
+  // (get <digest> from the v1.2.6 GitHub Release notes, or
+  // `docker buildx imagetools inspect ghcr.io/nabhold/baobab-dev:1.2.6`).
+  "image": "ghcr.io/nabhold/baobab-dev:1.2.6",
   // "build": {
   //   // Repo root, not .devcontainer — Dockerfile COPYs config/ and scripts/
   //   // from the build context root.

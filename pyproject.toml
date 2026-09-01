@@ -51,7 +51,7 @@
 # ==============================================================================
 
 [project]
-name = "baobab-devcontainer"
+name = "baobab-dev"
 version = "0.1.0"
 description = "Enterprise-grade, reproducible development container for the BAOBAB Enterprise Platform."
 readme = "README.md"
