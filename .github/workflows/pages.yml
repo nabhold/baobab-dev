@@ -71,7 +71,7 @@ jobs:
       # v1.0.0` on 2026-08-25. See the same note in greetings.yml above
       # re: Dependabot and dependabot-core#14716.
       - id: resolve
-        uses: nabhold/shared/.github/actions/derive-value-from-yaml@ad5cdb028023cd6b9c48cd8d7e6151ef4ab0cd73 # v1.0.0
+        uses: nabhold/shared/.github/actions/derive-value-from-yaml@f8df9b90ffe8fef5cbf6d14a9bcf868f723d1464 # v1.1.0
         with:
           manifest-path: config/versions.yaml   # TODO: adjust if this repo's manifest differs
           query: ".languages.python.version"    # TODO: adjust query path if schema differs
@@ -83,6 +83,6 @@ jobs:
       pages: write
       id-token: write
     # Same pin/rationale as resolve-python-version's step above.
-    uses: nabhold/shared/.github/workflows/pages-zensical.yml@ad5cdb028023cd6b9c48cd8d7e6151ef4ab0cd73 # v1.0.0
+    uses: nabhold/shared/.github/workflows/pages-zensical.yml@f8df9b90ffe8fef5cbf6d14a9bcf868f723d1464 # v1.1.0
     with:
       python-version: ${{ needs.resolve-python-version.outputs.version }}
