@@ -71,6 +71,15 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * [2026-09-02] Fixed the CI "scan built container with Trivy" step failing
+#   on both linux/amd64 and linux/arm64 `final` builds after Maven was added:
+#   Trivy's secret scanner flagged three placeholder credential-shaped values
+#   inside Maven's own stock conf/settings.xml documentation comments as HIGH
+#   secrets (raw byte pattern matching, not XML-comment-aware). Fixed by
+#   stripping all XML comments from the installed settings.xml right after
+#   extraction — see the new RUN step's comment in the `final` stage's
+#   "6b. Java + Maven" section for the full explanation. Not a real secret;
+#   nothing security-relevant changed in the actual toolchain.
 # * [2026-09-01] v1.3.0-rc.0: Added Java (Eclipse Temurin JDK) + Apache Maven
 #   to the `final` stage, needed by baobab-erp's iDempiere ERP engine
 #   migration (github.com/nabhold/baobab-erp) — see the new section 6b below,
@@ -1178,6 +1187,28 @@ RUN set -euo pipefail; \
     mkdir -p /opt/maven; \
     tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1; \
     rm -f /tmp/maven.tar.gz
+
+# FIX (2026-09-02): the Trivy "scan built container" CI step failed on both
+# platforms after Maven was added — not a real secret. Maven's own stock
+# conf/settings.xml ships with a large commented-out (`<!-- ... -->`)
+# documentation block illustrating the <servers>/<proxies>/<mirrors> syntax,
+# using placeholder credential-shaped values as examples (e.g.
+# <password>repopwd</password>, a dummy proxy password, a dummy passphrase).
+# Trivy's secret scanner does raw pattern matching over file bytes, not
+# XML-comment-aware parsing, so it flags these three inert, never-executed
+# example values as HIGH-severity "Maven settings.xml password/passphrase"
+# secrets. This is the file Apache ships verbatim in every 3.9.16
+# distribution — already verified byte-for-byte via MAVEN_SHA512 above,
+# before this step ever touches it — not something this project introduced.
+#
+# Fix: strip every XML comment from the installed settings.xml. The file
+# ships with no active (uncommented) configuration at all — comments are
+# 100% of its non-boilerplate content — so this removes only dead
+# documentation, not functional behavior; `mvn --version` and every other
+# Maven invocation are unaffected. Real credentials, if a developer ever
+# configures any, belong in their own ~/.m2/settings.xml at the container's
+# runtime, never in this image.
+RUN python3 -c "import re; p = '/opt/maven/conf/settings.xml'; c = open(p).read(); open(p, 'w').write(re.sub(r'<!--.*?-->', '', c, flags=re.DOTALL))"
 
 # -----------------------------------------------------------------------------
 # 7. Docker CLI + Compose plugin (client only — Codespaces mounts the host

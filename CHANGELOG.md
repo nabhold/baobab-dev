@@ -29,6 +29,14 @@ in `README.md § Versioning strategy`.
   pointed at `github.com/nabhold/baobab-devcontainer`, a repository name this
   project has never used. Both now correctly point at
   `github.com/nabhold/baobab-dev`.
+- CI's "scan built container with Trivy" step failed on both `linux/amd64`
+  and `linux/arm64` `final` builds: Trivy's secret scanner flagged three
+  placeholder credential-shaped values inside Maven's own stock
+  `conf/settings.xml` documentation comments as HIGH-severity secrets (raw
+  byte pattern matching, not XML-comment-aware — not a real secret). Fixed
+  by stripping all XML comments from the installed `settings.xml` at build
+  time; Maven's actual behavior (`mvn --version` and every other invocation)
+  is unaffected.
 
 ## [1.0.0] — Baseline release
 
