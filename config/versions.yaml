@@ -40,6 +40,28 @@ languages:
     channel: "stable"
     source: "flutter"
 
+  java:
+    version: "17"
+    source: "apt"
+    # OpenJDK 17 (JDK, not JRE), via Eclipse Temurin's own apt repository —
+    # NOT Ubuntu's own openjdk-17-jdk package. Same reasoning already applied
+    # to docker/postgresql below: an upstream-maintained apt repo keeps the
+    # exact vendor/build consistent across Ubuntu base-image upgrades, rather
+    # than whatever OpenJDK build Ubuntu's own archive happens to carry for a
+    # given release. Adoptium publishes Temurin for both amd64 and arm64
+    # through this same repository (confirmed via their own multi-arch
+    # Docker images) — no per-arch checksum pair needed here, unlike the
+    # GitHub-release binaries under utilities/security below.
+    #
+    # Needed for baobab-erp's iDempiere ERP engine (github.com/nabhold/
+    # baobab-erp) — iDempiere's own docs (wiki.idempiere.org/en/
+    # Install_Prerequisites, live-verified 2026-09-01) require a JDK
+    # (explicitly not JRE-only — "openjdk-17-jre is not sufficient because
+    # it doesn't have the jar command used in some scripts"), OpenJDK 17 or
+    # later, LTS preferred. "17" here means major version only, resolved the
+    # same way postgresql.major is below — apt's own dependency resolution
+    # picks the exact point release, not this file.
+
 database:
 
   postgresql:
@@ -141,6 +163,28 @@ development:
   github_cli:
     version: "latest"
     source: "github"
+
+  maven:
+    version: "3.9.16"
+    source: "apache"
+    # Explicit pin, NOT "latest" — unlike almost every other GitHub/npm-sourced
+    # tool in this file. Maven Central's own maven-metadata.xml currently
+    # resolves <latest>/<release> to 4.0.0-rc-6 (a pre-release of an
+    # in-development major version), which would silently pull an
+    # incompatible, non-GA toolchain into every build. iDempiere's own build
+    # requires the Maven 3.9.x line specifically (wiki.idempiere.org, see the
+    # java entry above) — 3.9.16 is the latest GA release on that line at
+    # authoring time (2026-09-01).
+    #
+    # Distribution is the official Apache tarball, architecture-independent
+    # (pure Java — no per-arch binary, unlike the Temurin JDK above), fetched
+    # from archive.apache.org (not dlcdn.apache.org, which only mirrors the
+    # single current release and would break reproducibility once 3.9.16 is
+    # superseded) at:
+    #   https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz
+    # Verified via the matching Apache-published `.sha512` sidecar (Apache
+    # publishes SHA-512 for Maven releases, not SHA-256 — see resolve.sh),
+    # per this repo's Zero-Trust Binary Downloads convention.
 
 # ------------------------------------------------------------------------------
 # NEW — frontend_tooling
