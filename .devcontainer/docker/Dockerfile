@@ -1208,6 +1208,7 @@ RUN set -euo pipefail; \
 # Maven invocation are unaffected. Real credentials, if a developer ever
 # configures any, belong in their own ~/.m2/settings.xml at the container's
 # runtime, never in this image.
+
 RUN python3 -c "import re; p = '/opt/maven/conf/settings.xml'; c = open(p).read(); open(p, 'w').write(re.sub(r'<!--.*?-->', '', c, flags=re.DOTALL))"
 
 # -----------------------------------------------------------------------------
