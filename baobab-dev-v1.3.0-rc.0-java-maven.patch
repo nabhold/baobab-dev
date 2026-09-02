@@ -1,0 +1,426 @@
+From f365efb1db2fca762ea95bcb45a583da768c26d7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 1 Sep 2026 19:10:50 +0000
+Subject: [PATCH] feat: add Java (Temurin JDK) + Apache Maven for iDempiere ERP
+ support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+baobab-erp's ERP engine migration to iDempiere requires a JDK and Maven
+3.9.x in the baobab-dev `full` profile — no other BAOBAB engine needs
+either today. Adds OpenJDK 17 via Eclipse Temurin's own apt repository
+(confirmed multi-arch: amd64 + arm64), and Apache Maven 3.9.16 as an
+explicitly pinned, SHA-512-verified tarball from archive.apache.org
+(Maven Central's own "latest" currently resolves to a 4.0.0 pre-release,
+which would be incompatible with iDempiere's documented 3.9.x
+requirement).
+
+Threads the new capability through the full pipeline this repo already
+established: config/versions.yaml (source of truth) -> config/resolve.sh
+(resolves + checksums into versions.lock) -> the Dockerfile's `final`
+stage (installs + wires JAVA_HOME/PATH) -> config/capabilities.yaml
+(contract self-declaration) -> scripts/verify.sh (build-time check).
+
+Also fixes a copy/paste bug in the `base` stage's OCI LABEL block: the
+image.source/image.documentation labels pointed at
+github.com/nabhold/baobab-devcontainer, a repository name this project
+has never used.
+
+Targets baobab-dev:v1.3.0-rc.0.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014W3z8LMoe1iiMVZkCES5QT
+---
+ .devcontainer/docker/Dockerfile | 86 +++++++++++++++++++++++++++++++--
+ CHANGELOG.md                    | 25 ++++++++++
+ config/capabilities.yaml        |  8 +++
+ config/resolve.sh               | 50 +++++++++++++++++++
+ config/versions.yaml            | 44 +++++++++++++++++
+ scripts/verify.sh               | 20 ++++++++
+ 6 files changed, 230 insertions(+), 3 deletions(-)
+
+diff --git a/.devcontainer/docker/Dockerfile b/.devcontainer/docker/Dockerfile
+index 0515833..152f6aa 100644
+--- a/.devcontainer/docker/Dockerfile
++++ b/.devcontainer/docker/Dockerfile
+@@ -71,6 +71,21 @@
+ #
+ # CHANGE LOG (this file, most recent first)
+ # ------------------------------------------------------------------------------
++# * [2026-09-01] v1.3.0-rc.0: Added Java (Eclipse Temurin JDK) + Apache Maven
++#   to the `final` stage, needed by baobab-erp's iDempiere ERP engine
++#   migration (github.com/nabhold/baobab-erp) — see the new section 6b below,
++#   and config/versions.yaml's `languages.java` / `development.maven`
++#   entries for the full rationale (Temurin apt repo confirmed multi-arch
++#   amd64+arm64; Maven's tarball is architecture-independent; Maven pinned
++#   explicitly to 3.9.16 rather than "latest" since Maven Central currently
++#   resolves latest/release to a 4.0.0 pre-release). JAVA_HOME and
++#   /opt/maven/bin were added to section 10's global PATH.
++# * [2026-09-01] Fixed a long-standing copy/paste bug in the `base` stage's
++#   OCI LABEL block: `image.source` and `image.documentation` pointed at
++#   `github.com/nabhold/baobab-devcontainer`, a repository name this project
++#   has never actually used — every other reference in this repo (README,
++#   devcontainer.json, this CHANGE LOG) has always said `baobab-dev`. Both
++#   labels now point at the real repository.
+ # * Fixed the bundled-tar upgrade in `with-node`: `npm install "tar@X"
+ #   --no-save` was run inside `$(npm root -g)/npm` so npm's arborist would
+ #   reify THAT PROJECT's own devDependencies too, including
+@@ -368,13 +383,13 @@ ARG REVISION
+ LABEL org.opencontainers.image.title="baobab-dev" \
+       org.opencontainers.image.description="Standard development container for the BAOBAB Enterprise Platform (Nabhold Group Africa)" \
+       org.opencontainers.image.vendor="Nabhold Group Africa" \
+-      org.opencontainers.image.source="https://github.com/nabhold/baobab-devcontainer" \
++      org.opencontainers.image.source="https://github.com/nabhold/baobab-dev" \
+       org.opencontainers.image.licenses="Apache-2.0" \
+       org.opencontainers.image.created=$BUILD_DATE \
+       org.opencontainers.image.version=$VERSION \
+       org.opencontainers.image.revision=$REVISION \
+       org.opencontainers.image.authors="Platform Engineering <platform@nabhold.com>" \
+-      org.opencontainers.image.documentation="https://github.com/nabhold/baobab-devcontainer/blob/main/README.md"
++      org.opencontainers.image.documentation="https://github.com/nabhold/baobab-dev/blob/main/README.md"
+ 
+ # -----------------------------------------------------------------------------
+ # devcontainer.metadata image label — Development Environment Contract task
+@@ -1100,6 +1115,70 @@ https://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo $VERSION_CO
+       postgresql-client-${POSTGRES_MAJOR} \
+       redis-tools
+ 
++# -----------------------------------------------------------------------------
++# 6b. Java (Eclipse Temurin JDK) + Apache Maven
++# -----------------------------------------------------------------------------
++# Needed for baobab-erp's iDempiere ERP engine migration
++# (github.com/nabhold/baobab-erp) — not needed by any other BAOBAB engine
++# today. iDempiere's own docs (wiki.idempiere.org/en/Install_Prerequisites,
++# live-verified 2026-09-01) require a full JDK, explicitly not JRE-only
++# ("openjdk-17-jre is not sufficient because it doesn't have the jar command
++# used in some scripts"), OpenJDK 17+ LTS preferred, plus Maven 3.9.x.
++#
++# JDK: installed from Eclipse Temurin's own apt repository (Adoptium), not
++# Ubuntu's native openjdk-17-jdk package — same reasoning already applied to
++# PostgreSQL/Docker above: an upstream-maintained repo keeps the exact
++# vendor/build consistent across Ubuntu base-image upgrades. Confirmed
++# multi-arch (amd64 + arm64) via Adoptium's own official multi-arch Docker
++# images — no per-arch checksum pair needed here, unlike the GitHub-release
++# binaries in the cli-tools stage.
++#
++# Maven: Apache's distribution is a pure-Java, architecture-independent
++# tarball — one asset, not a per-arch pair. Fetched from archive.apache.org
++# (not dlcdn.apache.org, which only mirrors the current release and would
++# break reproducibility once 3.9.16 is superseded) and verified via
++# sha512sum -c against MAVEN_SHA512 (Apache publishes a `.sha512` sidecar for
++# Maven releases, not `.sha256` — the one place in this Dockerfile that
++# checks a SHA-512 rather than a SHA-256, since the upstream project itself
++# only publishes the former). Pinned explicitly to 3.9.16 rather than
++# "latest" — see config/versions.yaml's development.maven comment: Maven
++# Central's own metadata currently resolves latest/release to a 4.0.0
++# pre-release, which would be incompatible with iDempiere's documented
++# Maven 3.9.x requirement.
++RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
++    --mount=type=cache,target=/var/lib/apt,sharing=locked \
++    install -m 0755 -d /etc/apt/keyrings && \
++    curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
++      -o /etc/apt/keyrings/adoptium.asc && \
++    chmod a+r /etc/apt/keyrings/adoptium.asc && \
++    ARCH=$(dpkg --print-architecture) && \
++    echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/adoptium.asc] \
++https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo $VERSION_CODENAME) main" \
++      > /etc/apt/sources.list.d/adoptium.list && \
++    apt-get update && \
++    . "${BAOBAB_CONFIG_DIR}/versions.lock" && \
++    apt-get install -y --no-install-recommends \
++      temurin-${JAVA_MAJOR}-jdk
++
++# Adoptium's package installs under a version- and arch-suffixed path
++# (/usr/lib/jvm/temurin-${JAVA_MAJOR}-jdk-<arch>) rather than a stable one.
++# `readlink -f` on the `javac` binary already on PATH resolves through
++# update-alternatives to that real, concrete install directory regardless of
++# arch, then a fixed /opt/java symlink is pointed at it — the same
++# "stable path, whatever the underlying vendor path really is" approach
++# already used by /opt/flutter and (below) /opt/maven, so JAVA_HOME in
++# section 10's global ENV block never has to hardcode a version/arch suffix.
++RUN ln -s "$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")" /opt/java
++
++RUN set -euo pipefail; \
++    . "${BAOBAB_CONFIG_DIR}/versions.lock"; \
++    curl -fsSL -o /tmp/maven.tar.gz \
++      "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"; \
++    echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c -; \
++    mkdir -p /opt/maven; \
++    tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1; \
++    rm -f /tmp/maven.tar.gz
++
+ # -----------------------------------------------------------------------------
+ # 7. Docker CLI + Compose plugin (client only — Codespaces mounts the host
+ #    Docker socket, so no dockerd/containerd is installed in this image)
+@@ -1175,7 +1254,8 @@ RUN if id "ubuntu" &>/dev/null; then userdel -r ubuntu; fi && \
+ # stage declaring its own profile explicitly, the way frontend/frontend-e2e
+ # now do) is exactly the kind of silent-convention drift this project's own
+ # hardening history has repeatedly had to dig back out of.
+-ENV PATH="/home/vscode/.local/bin:/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:/usr/local/bin:${PATH}" \
++ENV JAVA_HOME="/opt/java" \
++    PATH="/home/vscode/.local/bin:/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:/opt/maven/bin:/opt/java/bin:/usr/local/bin:${PATH}" \
+     PYTHONUNBUFFERED=1 \
+     PYTHONDONTWRITEBYTECODE=1 \
+     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 193c462..ab492c1 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+ versioning follows [Semantic Versioning](https://semver.org/) as described
+ in `README.md § Versioning strategy`.
+ 
++## [1.3.0-rc.0] — Java + Maven for iDempiere
++
++### Added
++- Eclipse Temurin OpenJDK 17 (JDK, not JRE) in the `full` profile, installed
++  from Adoptium's own apt repository (multi-arch: `linux/amd64` and
++  `linux/arm64`). Required by `baobab-erp`'s iDempiere ERP engine migration
++  (github.com/nabhold/baobab-erp) — not used by any other BAOBAB engine.
++- Apache Maven 3.9.16 in the `full` profile, installed from
++  `archive.apache.org` and verified against its published SHA-512 checksum.
++  Pinned explicitly rather than tracked at "latest": Maven Central's release
++  metadata currently resolves `latest`/`release` to a `4.0.0` pre-release,
++  which would be incompatible with iDempiere's documented Maven 3.9.x
++  requirement.
++- `config/capabilities.yaml`: `languages.java` and `development.maven`
++  declared under the `full` profile.
++- `scripts/verify.sh`: new "Java" section checking `java`, `javac`, and
++  `mvn`, gated on `BAOBAB_BUILD_PROFILE=full` like the other full-profile-only
++  checks.
++
++### Fixed
++- The `base` stage's OCI `image.source` and `image.documentation` labels
++  pointed at `github.com/nabhold/baobab-devcontainer`, a repository name this
++  project has never used. Both now correctly point at
++  `github.com/nabhold/baobab-dev`.
++
+ ## [1.0.0] — Baseline release
+ 
+ ### Added
+diff --git a/config/capabilities.yaml b/config/capabilities.yaml
+index 5d1e36c..31ed0f6 100644
+--- a/config/capabilities.yaml
++++ b/config/capabilities.yaml
+@@ -53,6 +53,7 @@ capabilities:
+       python: "3.14"
+       node: "24"
+       flutter: "stable"
++      java: "17"
+     database:
+       postgresql: "17"
+     package_managers:
+@@ -62,6 +63,7 @@ capabilities:
+     development:
+       docker: true
+       github_cli: true
++      maven: "3.9"
+     security:
+       cosign: true
+ 
+@@ -87,6 +89,12 @@ capabilities:
+ # ------------------------------------------------------------------------------
+ 
+ notes:
++  - >
++    [2026-09-01] Added `languages.java` and `development.maven` to the `full`
++    profile (v1.3.0-rc.0) — needed by baobab-erp's iDempiere ERP engine
++    migration, not by any other BAOBAB engine today. Deliberately not added
++    to `frontend`/`frontend-e2e`: those profiles back frontend-only
++    Dockerfile targets that never install a JDK or Maven in the first place.
+   - >
+     This is a hand-authored snapshot at the time of writing. It MUST be kept
+     in sync with versions.yaml manually until a generation step exists. A CI
+diff --git a/config/resolve.sh b/config/resolve.sh
+index 9fdc57b..30f45f8 100755
+--- a/config/resolve.sh
++++ b/config/resolve.sh
+@@ -240,6 +240,27 @@ flutter_archive_url_for_version() {
+     printf "https://storage.googleapis.com/flutter_infra_release/releases/%s" "${archive_path}"
+ }
+ 
++# ------------------------------------------------------------------------------
++# Apache Maven checksum
++#
++# Maven's distribution is a pure-Java, architecture-independent tarball (see
++# versions.yaml's development.maven comment) — a single asset, not a per-arch
++# pair like the GitHub-release binaries above. Apache publishes a `.sha512`
++# checksum sidecar per release (not `.sha256` — Apache's own convention,
++# different from GitHub's asset-digest feature used elsewhere in this file),
++# served from archive.apache.org so this keeps working after 3.9.16 is no
++# longer the current release on dlcdn.apache.org's mirror rotation.
++# ------------------------------------------------------------------------------
++
++maven_sha512_for_version() {
++
++    local version="$1"
++
++    curl -fsSL \
++        "https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz.sha512" |
++        tr -d '[:space:]'
++}
++
+ # npm-sourced tools (pnpm, turbo, playwright, sharp, lighthouse) have no
+ # GitHub Releases API equivalent worth using here — they're versioned and
+ # distributed via the npm registry itself, which publishes a canonical
+@@ -335,6 +356,13 @@ NODE_MAJOR=$(yaml '.languages.node.major')
+ 
+ POSTGRES_MAJOR=$(yaml '.database.postgresql.major')
+ 
++# Same pattern as NODE_MAJOR/POSTGRES_MAJOR above: apt-sourced, major version
++# only, no upstream "latest" resolution to perform here — apt's own
++# dependency resolver picks the exact point release at build time from
++# Eclipse Temurin's repository (see versions.yaml's languages.java comment).
++JAVA_MAJOR=$(yaml '.languages.java.version')
++require_resolved "$JAVA_MAJOR" "versions.yaml key '.languages.java.version'"
++
+ # ------------------------------------------------------------------------------
+ # Flutter
+ # ------------------------------------------------------------------------------
+@@ -547,6 +575,23 @@ YQ_SHA256_AMD64=$(github_asset_digest "mikefarah/yq" "v${YQ_VERSION}" "${YQ_ASSE
+ YQ_ASSET_ARM64="yq_linux_arm64"
+ YQ_SHA256_ARM64=$(github_asset_digest "mikefarah/yq" "v${YQ_VERSION}" "${YQ_ASSET_ARM64}")
+ 
++# ------------------------------------------------------------------------------
++# Apache Maven (development.maven)
++#
++# Explicit pin, not "latest" — see versions.yaml's development.maven comment
++# for the 4.0.0-rc-6 rationale. No resolve_github()/npm_registry_latest()
++# call needed since there is no "latest" branch to resolve here; still runs
++# through require_resolved() so a missing/malformed versions.yaml key fails
++# here, at lockfile-generation time, like every other tool in this file.
++# ------------------------------------------------------------------------------
++
++MAVEN_VERSION=$(yaml '.development.maven.version')
++require_resolved "$MAVEN_VERSION" "versions.yaml key '.development.maven.version'"
++
++info "Fetching Maven checksum for ${MAVEN_VERSION}..."
++MAVEN_SHA512=$(maven_sha512_for_version "${MAVEN_VERSION}")
++require_resolved "$MAVEN_SHA512" "Apache archive .sha512 lookup for Maven ${MAVEN_VERSION}"
++
+ # ------------------------------------------------------------------------------
+ # NEW: frontend_tooling (turbo, playwright, sharp, lighthouse)
+ #
+@@ -595,6 +640,8 @@ export PYTHON_MINOR=${PYTHON_MINOR}
+ 
+ export NODE_MAJOR=${NODE_MAJOR}
+ 
++export JAVA_MAJOR=${JAVA_MAJOR}
++
+ export FLUTTER_VERSION=${FLUTTER_VERSION}
+ export FLUTTER_SHA256=${FLUTTER_SHA256}
+ export FLUTTER_SHA256_AMD64=${FLUTTER_SHA256_AMD64}
+@@ -660,6 +707,9 @@ export COSIGN_SHA256_AMD64=${COSIGN_SHA256_AMD64}
+ export COSIGN_ASSET_ARM64=${COSIGN_ASSET_ARM64}
+ export COSIGN_SHA256_ARM64=${COSIGN_SHA256_ARM64}
+ 
++export MAVEN_VERSION=${MAVEN_VERSION}
++export MAVEN_SHA512=${MAVEN_SHA512}
++
+ export TURBO_VERSION=${TURBO_VERSION}
+ export PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}
+ export SHARP_VERSION=${SHARP_VERSION}
+diff --git a/config/versions.yaml b/config/versions.yaml
+index c273387..3f33209 100644
+--- a/config/versions.yaml
++++ b/config/versions.yaml
+@@ -40,6 +40,28 @@ languages:
+     channel: "stable"
+     source: "flutter"
+ 
++  java:
++    version: "17"
++    source: "apt"
++    # OpenJDK 17 (JDK, not JRE), via Eclipse Temurin's own apt repository —
++    # NOT Ubuntu's own openjdk-17-jdk package. Same reasoning already applied
++    # to docker/postgresql below: an upstream-maintained apt repo keeps the
++    # exact vendor/build consistent across Ubuntu base-image upgrades, rather
++    # than whatever OpenJDK build Ubuntu's own archive happens to carry for a
++    # given release. Adoptium publishes Temurin for both amd64 and arm64
++    # through this same repository (confirmed via their own multi-arch
++    # Docker images) — no per-arch checksum pair needed here, unlike the
++    # GitHub-release binaries under utilities/security below.
++    #
++    # Needed for baobab-erp's iDempiere ERP engine (github.com/nabhold/
++    # baobab-erp) — iDempiere's own docs (wiki.idempiere.org/en/
++    # Install_Prerequisites, live-verified 2026-09-01) require a JDK
++    # (explicitly not JRE-only — "openjdk-17-jre is not sufficient because
++    # it doesn't have the jar command used in some scripts"), OpenJDK 17 or
++    # later, LTS preferred. "17" here means major version only, resolved the
++    # same way postgresql.major is below — apt's own dependency resolution
++    # picks the exact point release, not this file.
++
+ database:
+ 
+   postgresql:
+@@ -142,6 +164,28 @@ development:
+     version: "latest"
+     source: "github"
+ 
++  maven:
++    version: "3.9.16"
++    source: "apache"
++    # Explicit pin, NOT "latest" — unlike almost every other GitHub/npm-sourced
++    # tool in this file. Maven Central's own maven-metadata.xml currently
++    # resolves <latest>/<release> to 4.0.0-rc-6 (a pre-release of an
++    # in-development major version), which would silently pull an
++    # incompatible, non-GA toolchain into every build. iDempiere's own build
++    # requires the Maven 3.9.x line specifically (wiki.idempiere.org, see the
++    # java entry above) — 3.9.16 is the latest GA release on that line at
++    # authoring time (2026-09-01).
++    #
++    # Distribution is the official Apache tarball, architecture-independent
++    # (pure Java — no per-arch binary, unlike the Temurin JDK above), fetched
++    # from archive.apache.org (not dlcdn.apache.org, which only mirrors the
++    # single current release and would break reproducibility once 3.9.16 is
++    # superseded) at:
++    #   https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz
++    # Verified via the matching Apache-published `.sha512` sidecar (Apache
++    # publishes SHA-512 for Maven releases, not SHA-256 — see resolve.sh),
++    # per this repo's Zero-Trust Binary Downloads convention.
++
+ # ------------------------------------------------------------------------------
+ # NEW — frontend_tooling
+ #
+diff --git a/scripts/verify.sh b/scripts/verify.sh
+index 011f23d..24213b1 100644
+--- a/scripts/verify.sh
++++ b/scripts/verify.sh
+@@ -72,6 +72,7 @@ fi
+ : "${PYTHON_VERSION:=3.14}"
+ : "${NODE_MAJOR:=24}"
+ : "${FLUTTER_VERSION:=unknown}"
++: "${JAVA_MAJOR:=17}"
+ : "${EXPECTED_USER:=vscode}"
+ : "${EXPECTED_UID:=1000}"
+ : "${EXPECTED_GID:=1000}"
+@@ -369,6 +370,25 @@ else
+     say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Flutter"
+ fi
+ 
++###############################################################################
++# Java
++###############################################################################
++
++section "Java"
++
++# Needed only for baobab-erp's iDempiere ERP engine migration — not by any
++# other BAOBAB engine today. Matches capabilities.yaml, which only lists
++# `languages.java`/`development.maven` under `full`.
++if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
++
++    check_required "Java ${JAVA_MAJOR}" java "java --version"
++    check_required "javac" javac "javac --version"
++    check_required "Maven" mvn "mvn --version"
++
++else
++    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Java/Maven"
++fi
++
+ ###############################################################################
+ # Databases
+ ###############################################################################
+-- 
+2.43.0
+

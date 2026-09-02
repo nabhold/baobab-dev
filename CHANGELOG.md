@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/) as described
 in `README.md § Versioning strategy`.
 
+## [1.3.0-rc.0] — Java + Maven for iDempiere
+
+### Added
+- Eclipse Temurin OpenJDK 17 (JDK, not JRE) in the `full` profile, installed
+  from Adoptium's own apt repository (multi-arch: `linux/amd64` and
+  `linux/arm64`). Required by `baobab-erp`'s iDempiere ERP engine migration
+  (github.com/nabhold/baobab-erp) — not used by any other BAOBAB engine.
+- Apache Maven 3.9.16 in the `full` profile, installed from
+  `archive.apache.org` and verified against its published SHA-512 checksum.
+  Pinned explicitly rather than tracked at "latest": Maven Central's release
+  metadata currently resolves `latest`/`release` to a `4.0.0` pre-release,
+  which would be incompatible with iDempiere's documented Maven 3.9.x
+  requirement.
+- `config/capabilities.yaml`: `languages.java` and `development.maven`
+  declared under the `full` profile.
+- `scripts/verify.sh`: new "Java" section checking `java`, `javac`, and
+  `mvn`, gated on `BAOBAB_BUILD_PROFILE=full` like the other full-profile-only
+  checks.
+
+### Fixed
+- The `base` stage's OCI `image.source` and `image.documentation` labels
+  pointed at `github.com/nabhold/baobab-devcontainer`, a repository name this
+  project has never used. Both now correctly point at
+  `github.com/nabhold/baobab-dev`.
+
 ## [1.0.0] — Baseline release
 
 ### Added

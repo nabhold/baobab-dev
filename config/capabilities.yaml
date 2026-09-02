@@ -53,6 +53,7 @@ capabilities:
       python: "3.14"
       node: "24"
       flutter: "stable"
+      java: "17"
     database:
       postgresql: "17"
     package_managers:
@@ -62,6 +63,7 @@ capabilities:
     development:
       docker: true
       github_cli: true
+      maven: "3.9"
     security:
       cosign: true
 
@@ -87,6 +89,12 @@ capabilities:
 # ------------------------------------------------------------------------------
 
 notes:
+  - >
+    [2026-09-01] Added `languages.java` and `development.maven` to the `full`
+    profile (v1.3.0-rc.0) — needed by baobab-erp's iDempiere ERP engine
+    migration, not by any other BAOBAB engine today. Deliberately not added
+    to `frontend`/`frontend-e2e`: those profiles back frontend-only
+    Dockerfile targets that never install a JDK or Maven in the first place.
   - >
     This is a hand-authored snapshot at the time of writing. It MUST be kept
     in sync with versions.yaml manually until a generation step exists. A CI

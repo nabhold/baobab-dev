@@ -72,6 +72,7 @@ fi
 : "${PYTHON_VERSION:=3.14}"
 : "${NODE_MAJOR:=24}"
 : "${FLUTTER_VERSION:=unknown}"
+: "${JAVA_MAJOR:=17}"
 : "${EXPECTED_USER:=vscode}"
 : "${EXPECTED_UID:=1000}"
 : "${EXPECTED_GID:=1000}"
@@ -367,6 +368,25 @@ if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
 
 else
     say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Flutter"
+fi
+
+###############################################################################
+# Java
+###############################################################################
+
+section "Java"
+
+# Needed only for baobab-erp's iDempiere ERP engine migration — not by any
+# other BAOBAB engine today. Matches capabilities.yaml, which only lists
+# `languages.java`/`development.maven` under `full`.
+if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
+
+    check_required "Java ${JAVA_MAJOR}" java "java --version"
+    check_required "javac" javac "javac --version"
+    check_required "Maven" mvn "mvn --version"
+
+else
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Java/Maven"
 fi
 
 ###############################################################################

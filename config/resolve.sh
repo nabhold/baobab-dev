@@ -240,6 +240,27 @@ flutter_archive_url_for_version() {
     printf "https://storage.googleapis.com/flutter_infra_release/releases/%s" "${archive_path}"
 }
 
+# ------------------------------------------------------------------------------
+# Apache Maven checksum
+#
+# Maven's distribution is a pure-Java, architecture-independent tarball (see
+# versions.yaml's development.maven comment) — a single asset, not a per-arch
+# pair like the GitHub-release binaries above. Apache publishes a `.sha512`
+# checksum sidecar per release (not `.sha256` — Apache's own convention,
+# different from GitHub's asset-digest feature used elsewhere in this file),
+# served from archive.apache.org so this keeps working after 3.9.16 is no
+# longer the current release on dlcdn.apache.org's mirror rotation.
+# ------------------------------------------------------------------------------
+
+maven_sha512_for_version() {
+
+    local version="$1"
+
+    curl -fsSL \
+        "https://archive.apache.org/dist/maven/maven-3/${version}/binaries/apache-maven-${version}-bin.tar.gz.sha512" |
+        tr -d '[:space:]'
+}
+
 # npm-sourced tools (pnpm, turbo, playwright, sharp, lighthouse) have no
 # GitHub Releases API equivalent worth using here — they're versioned and
 # distributed via the npm registry itself, which publishes a canonical
@@ -334,6 +355,13 @@ PYTHON_VERSION=$(yaml '.languages.python.version')
 NODE_MAJOR=$(yaml '.languages.node.major')
 
 POSTGRES_MAJOR=$(yaml '.database.postgresql.major')
+
+# Same pattern as NODE_MAJOR/POSTGRES_MAJOR above: apt-sourced, major version
+# only, no upstream "latest" resolution to perform here — apt's own
+# dependency resolver picks the exact point release at build time from
+# Eclipse Temurin's repository (see versions.yaml's languages.java comment).
+JAVA_MAJOR=$(yaml '.languages.java.version')
+require_resolved "$JAVA_MAJOR" "versions.yaml key '.languages.java.version'"
 
 # ------------------------------------------------------------------------------
 # Flutter
@@ -548,6 +576,23 @@ YQ_ASSET_ARM64="yq_linux_arm64"
 YQ_SHA256_ARM64=$(github_asset_digest "mikefarah/yq" "v${YQ_VERSION}" "${YQ_ASSET_ARM64}")
 
 # ------------------------------------------------------------------------------
+# Apache Maven (development.maven)
+#
+# Explicit pin, not "latest" — see versions.yaml's development.maven comment
+# for the 4.0.0-rc-6 rationale. No resolve_github()/npm_registry_latest()
+# call needed since there is no "latest" branch to resolve here; still runs
+# through require_resolved() so a missing/malformed versions.yaml key fails
+# here, at lockfile-generation time, like every other tool in this file.
+# ------------------------------------------------------------------------------
+
+MAVEN_VERSION=$(yaml '.development.maven.version')
+require_resolved "$MAVEN_VERSION" "versions.yaml key '.development.maven.version'"
+
+info "Fetching Maven checksum for ${MAVEN_VERSION}..."
+MAVEN_SHA512=$(maven_sha512_for_version "${MAVEN_VERSION}")
+require_resolved "$MAVEN_SHA512" "Apache archive .sha512 lookup for Maven ${MAVEN_VERSION}"
+
+# ------------------------------------------------------------------------------
 # NEW: frontend_tooling (turbo, playwright, sharp, lighthouse)
 #
 # Backs the `frontend`/`frontend-e2e` Dockerfile targets (ADR-0001,
@@ -594,6 +639,8 @@ export PYTHON_VERSION=${PYTHON_VERSION}
 export PYTHON_MINOR=${PYTHON_MINOR}
 
 export NODE_MAJOR=${NODE_MAJOR}
+
+export JAVA_MAJOR=${JAVA_MAJOR}
 
 export FLUTTER_VERSION=${FLUTTER_VERSION}
 export FLUTTER_SHA256=${FLUTTER_SHA256}
@@ -659,6 +706,9 @@ export COSIGN_ASSET_AMD64=${COSIGN_ASSET_AMD64}
 export COSIGN_SHA256_AMD64=${COSIGN_SHA256_AMD64}
 export COSIGN_ASSET_ARM64=${COSIGN_ASSET_ARM64}
 export COSIGN_SHA256_ARM64=${COSIGN_SHA256_ARM64}
+
+export MAVEN_VERSION=${MAVEN_VERSION}
+export MAVEN_SHA512=${MAVEN_SHA512}
 
 export TURBO_VERSION=${TURBO_VERSION}
 export PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}
