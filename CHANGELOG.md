@@ -37,6 +37,14 @@ in `README.md § Versioning strategy`.
   by stripping all XML comments from the installed `settings.xml` at build
   time; Maven's actual behavior (`mvn --version` and every other invocation)
   is unaffected.
+- That fix initially shipped as its own trailing `RUN` layer, and CI kept
+  failing with the identical pre-fix findings even once confirmed running
+  against the commit containing it — a stale BuildKit cache hit on that
+  layer, since the extraction instruction immediately before it was
+  legitimately unchanged from the prior commit and stayed cacheable. Merged
+  the extraction and the comment-stripping into a single `RUN` instruction
+  so the combined instruction text is itself new, guaranteeing a fresh
+  cache key independent of any neighboring layer.
 
 ## [1.0.0] — Baseline release
 

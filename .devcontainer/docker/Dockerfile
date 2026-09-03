@@ -71,6 +71,17 @@
 #
 # CHANGE LOG (this file, most recent first)
 # ------------------------------------------------------------------------------
+# * [2026-09-03] Merged the Maven "extract" and "strip settings.xml comments"
+#   RUN steps (added 2026-09-02) into a single RUN instruction. CI kept
+#   reporting the pre-fix Trivy findings, at the *unmodified* stock file's
+#   exact line numbers, even on runs confirmed (via the checkout step log)
+#   to have built the commit containing the separate fix step — the
+#   signature of a stale/false BuildKit cache hit on that trailing layer,
+#   since the extraction instruction immediately before it is legitimately
+#   unchanged and cacheable since the prior commit. Merging them makes the
+#   combined instruction's text itself new, forcing a guaranteed fresh cache
+#   key. See the updated comment on the merged RUN step in "6b. Java +
+#   Maven" for the full explanation.
 # * [2026-09-02] Fixed the CI "scan built container with Trivy" step failing
 #   on both linux/amd64 and linux/arm64 `final` builds after Maven was added:
 #   Trivy's secret scanner flagged three placeholder credential-shaped values
@@ -1179,16 +1190,7 @@ https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo $VERSI
 # section 10's global ENV block never has to hardcode a version/arch suffix.
 RUN ln -s "$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")" /opt/java
 
-RUN set -euo pipefail; \
-    . "${BAOBAB_CONFIG_DIR}/versions.lock"; \
-    curl -fsSL -o /tmp/maven.tar.gz \
-      "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"; \
-    echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c -; \
-    mkdir -p /opt/maven; \
-    tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1; \
-    rm -f /tmp/maven.tar.gz
-
-# FIX (2026-09-02): the Trivy "scan built container" CI step failed on both
+# FIX (2026-09-03): the Trivy "scan built container" CI step failed on both
 # platforms after Maven was added — not a real secret. Maven's own stock
 # conf/settings.xml ships with a large commented-out (`<!-- ... -->`)
 # documentation block illustrating the <servers>/<proxies>/<mirrors> syntax,
@@ -1198,18 +1200,38 @@ RUN set -euo pipefail; \
 # XML-comment-aware parsing, so it flags these three inert, never-executed
 # example values as HIGH-severity "Maven settings.xml password/passphrase"
 # secrets. This is the file Apache ships verbatim in every 3.9.16
-# distribution — already verified byte-for-byte via MAVEN_SHA512 above,
+# distribution — already verified byte-for-byte via MAVEN_SHA512 below,
 # before this step ever touches it — not something this project introduced.
 #
-# Fix: strip every XML comment from the installed settings.xml. The file
-# ships with no active (uncommented) configuration at all — comments are
-# 100% of its non-boilerplate content — so this removes only dead
-# documentation, not functional behavior; `mvn --version` and every other
-# Maven invocation are unaffected. Real credentials, if a developer ever
-# configures any, belong in their own ~/.m2/settings.xml at the container's
-# runtime, never in this image.
-
-RUN python3 -c "import re; p = '/opt/maven/conf/settings.xml'; c = open(p).read(); open(p, 'w').write(re.sub(r'<!--.*?-->', '', c, flags=re.DOTALL))"
+# Fix: strip every XML comment from settings.xml immediately after
+# extraction, in the SAME RUN/layer as the extraction itself (previously
+# this was its own, separate RUN appended in a later commit — CI kept
+# reporting the pre-fix findings at the *original* file's exact line
+# numbers even after that commit was confirmed checked out, which is the
+# signature of a stale/false BuildKit cache hit on that trailing layer:
+# the Dockerfile line for the extraction instruction is unchanged from the
+# commit that first introduced it, so on its own it remains legitimately
+# cacheable, and re-running the previously-separate strip command as a
+# `docker/build-push-action` `cache-from`-only, no-`cache-to` step
+# apparently isn't a reliable enough cache-miss signal for it in practice).
+# Merging the two into one instruction makes the combined command text
+# itself brand new — guaranteeing a fresh cache key with no dependence on
+# a neighboring layer boundary. The file ships with no active
+# (uncommented) configuration at all — comments are 100% of its
+# non-boilerplate content — so this removes only dead documentation, not
+# functional behavior; `mvn --version` and every other Maven invocation
+# are unaffected. Real credentials, if a developer ever configures any,
+# belong in their own ~/.m2/settings.xml at the container's runtime, never
+# in this image.
+RUN set -euo pipefail; \
+    . "${BAOBAB_CONFIG_DIR}/versions.lock"; \
+    curl -fsSL -o /tmp/maven.tar.gz \
+      "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz"; \
+    echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c -; \
+    mkdir -p /opt/maven; \
+    tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1; \
+    rm -f /tmp/maven.tar.gz; \
+    python3 -c "import re; p = '/opt/maven/conf/settings.xml'; c = open(p).read(); open(p, 'w').write(re.sub(r'<!--.*?-->', '', c, flags=re.DOTALL))"
 
 # -----------------------------------------------------------------------------
 # 7. Docker CLI + Compose plugin (client only — Codespaces mounts the host
@@ -1361,5 +1383,3 @@ HEALTHCHECK \
     --start-period=15s \
     --retries=3 \
     CMD baobab-verify || exit 1
-
-CMD ["sleep", "infinity"]
