@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/) as described
 in `README.md § Versioning strategy`.
 
+## [1.4.0-rc.0] — `infra` profile: Terraform + AWS CLI for nabhold/infrastructure
+
+### Added
+- New `infra` Dockerfile build target (`ghcr.io/nabhold/baobab-dev:{version}-infra`)
+  — Terraform + AWS CLI only, for nabhold/infrastructure's local development
+  and testing. Branches directly off the shared `base` stage, not `with-node`
+  — this profile needs none of Python/Node/Flutter/Java, matching
+  nabhold/infrastructure's own README, which defers Kubernetes/Helm/Temporal
+  "until operational need justifies their additional machinery."
+- HashiCorp Terraform 1.16.1, installed from `releases.hashicorp.com` as a
+  per-architecture zip and verified against HashiCorp's own SHA256SUMS
+  manifest (`config/resolve.sh`'s new `terraform_sha256_for_asset()`).
+  Explicit pin, not "latest" — same rationale as `development.maven`: infra
+  tooling is exactly the class of dependency where a silent version float
+  carries real risk.
+- AWS CLI v2.36.38, installed from AWS's versioned installer archives
+  (`awscli.amazonaws.com/awscli-exe-linux-<arch>-<version>.zip`) and
+  verified via its detached PGP signature against the AWS CLI Team's
+  published public key (fingerprint `FB5D B77F D5C1 18B8 0511 ADA8 A631
+  0ACC 4672 475C) — the one deliberate exception to this project's
+  sha256sum/sha512sum convention, since AWS does not publish a
+  SHA256SUMS-style manifest for the CLI, only a per-archive signature.
+- `config/capabilities.yaml`: new `infra` profile —
+  `development.docker`/`github_cli`/`terraform`/`aws_cli` — branching
+  independently of both `full` and `frontend` (not `extends:` either one).
+- `scripts/verify.sh`: new "Infrastructure" section checking `terraform`
+  and `aws`, gated on `BAOBAB_BUILD_PROFILE=infra`; the "Containers"
+  section's Docker CLI check now also runs for `infra`, not just `full`;
+  the previously-ungated "JavaScript" section (Node/npm/pnpm/Yarn) is now
+  skipped for `infra`, the first profile that doesn't descend from
+  `with-node`.
+- `.github/workflows/publish.yml`: `infra` added to both matrix `target`
+  lists (build + publish). No other workflow change was needed — the
+  tag-suffix logic and the non-final smoke-test step were already written
+  generically for "any non-final target," not enumerated per target.
+
 ## [1.3.0-rc.0] — Java + Maven for iDempiere
 
 ### Added

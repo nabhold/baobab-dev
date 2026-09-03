@@ -239,3 +239,59 @@ security:
   cosign:
     version: "latest"
     source: "github"
+
+# ------------------------------------------------------------------------------
+# NEW — infra
+#
+# Backs the `infra` Dockerfile build target and the `infra` profile in the
+# development-environment contract schema (nabhold/shared). Powers local
+# development + testing for nabhold/infrastructure (Terraform-managed AWS
+# infrastructure) — deliberately excludes Python/Node/Flutter/Java/Maven,
+# none of which infrastructure-as-code needs. Branches off `base` directly
+# in the Dockerfile, not `with-node` — see that stage's own comment.
+# ------------------------------------------------------------------------------
+
+infra:
+
+  terraform:
+    version: "1.16.1"
+    source: "hashicorp"
+    # Explicit pin, NOT "latest" — same rationale as development.maven
+    # above: infra tooling is exactly the class of dependency where a
+    # silent version float carries real risk (a `terraform apply` running
+    # against live AWS infrastructure with an unreviewed provider/engine
+    # upgrade). 1.16.1 is HashiCorp's current stable release at authoring
+    # time (2026-09-02/03), live-verified against
+    # releases.hashicorp.com/terraform/1.16.1/terraform_1.16.1_SHA256SUMS.
+    #
+    # Distribution is a per-architecture zip (unlike Maven's single
+    # architecture-independent tarball). HashiCorp publishes one SHA256SUMS
+    # manifest per release covering every platform's asset — verified via
+    # the same sha256sum -c mechanism as the GitHub-release binaries in the
+    # cli-tools stage (see resolve.sh's terraform_sha256_for_asset()),
+    # just sourced from releases.hashicorp.com instead of GitHub's API.
+
+  aws_cli:
+    version: "2.36.38"
+    source: "aws"
+    # Explicit pin, NOT "latest" — same infra-tooling rationale as
+    # terraform above. AWS publishes versioned installer archives
+    # (awscli-exe-linux-<arch>-<version>.zip) alongside its current
+    # release — see "Installing past releases of the AWS CLI version 2"
+    # (docs.aws.amazon.com/cli/latest/userguide/getting-started-version.html).
+    # 2.36.38 is the current release at authoring time (2026-09-02/03),
+    # live-verified against github.com/aws/aws-cli's own v2 CHANGELOG.rst
+    # and by confirming both architectures' installer archives actually
+    # exist at that version's URL.
+    #
+    # Verification is NOT checksum-based — the one deliberate exception to
+    # this file's sha256sum/sha512sum convention. AWS does not publish a
+    # SHA256SUMS-style manifest for the CLI; each archive ships instead
+    # with a detached PGP signature (.sig), verified at Docker build time
+    # via `gpg --verify` against the AWS CLI Team's published public key
+    # (fingerprint FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C,
+    # embedded directly in the Dockerfile's infra stage). Same category as
+    # Maven's SHA-512-not-SHA-256 exception above — a different vendor
+    # convention, not a weaker one: round-trip verified in this session
+    # (key import -> download -> gpg --verify: good signature; a
+    # tampered-file negative control was correctly rejected).

@@ -1375,7 +1375,243 @@ RUN poetry config virtualenvs.in-project true
 # the runtime user identity.
 # -----------------------------------------------------------------------------
 
-RUN baobab-verify 
+RUN baobab-verify
+
+HEALTHCHECK \
+    --interval=60s \
+    --timeout=10s \
+    --start-period=15s \
+    --retries=3 \
+    CMD baobab-verify || exit 1
+
+CMD ["sleep", "infinity"]
+
+# -----------------------------------------------------------------------------
+# Stage: infra — Terraform + AWS CLI only, for nabhold/infrastructure's local
+# development and testing (nabhold/infrastructure has no devcontainer
+# profile today; this is what it declares going forward).
+#
+# Branches directly off `base`, NOT `with-node` — this profile needs none of
+# Python/Node/Flutter/Java (nabhold/infrastructure's own README: Terraform +
+# AWS CLI, with Kubernetes/Helm/Temporal "deliberately deferred until
+# operational need justifies their additional machinery"). Sibling to
+# `with-node`, same deliberate-isolation reasoning as `frontend`'s own stage
+# comment above: a Terraform version bump can never invalidate the Node/
+# Python/Flutter layers `with-node`/`final` depend on, and vice versa.
+#
+# NEW stage (2026-09-03) — nabhold/infrastructure local development +
+# testing proposal.
+# -----------------------------------------------------------------------------
+FROM base AS infra
+
+# Same ARG re-declaration requirement as `frontend`/`final` above.
+ARG BUILD_DATE
+ARG VERSION
+ARG REVISION
+
+# devcontainer.metadata override — infra has none of `base`'s Next.js dev
+# server (no Node in this profile at all) and none of `final`'s platform
+# port set (no Django/FastAPI/Postgres/Redis/MinIO here either). Left with
+# an empty forwardPorts list rather than inheriting `base`'s Next.js
+# default: Terraform/AWS CLI are CLI tools, not long-running processes with
+# a port to forward.
+LABEL devcontainer.metadata='{"forwardPorts":[],"otherPortsAttributes":{"onAutoForward":"silent","visibility":"private"}}'
+
+# -----------------------------------------------------------------------------
+# Docker CLI + Compose plugin — byte-identical to `final`'s equivalent block
+# (client only; Codespaces mounts the host Docker socket, so no dockerd/
+# containerd here either). Needed for Terraform's own `docker` provider use
+# and for running the compose stack nabhold/infrastructure's own README
+# documents — unlike `frontend`, which deliberately excludes Docker CLI.
+# -----------------------------------------------------------------------------
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    ARCH=$(dpkg --print-architecture) && \
+    echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+      > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      docker-ce-cli \
+      docker-compose-plugin \
+      docker-buildx-plugin
+
+# -----------------------------------------------------------------------------
+# HashiCorp Terraform
+#
+# Per-architecture zip, verified against HashiCorp's own SHA256SUMS manifest
+# (config/resolve.sh fetched the specific line for this exact asset — see
+# terraform_sha256_for_asset() there) — the same sha256sum -c verification
+# shape as every GitHub-release binary in the cli-tools stage, just from
+# releases.hashicorp.com instead of GitHub's API. Terraform ships as a
+# single static binary inside the zip, extracted straight to /usr/local/bin
+# — no surrounding directory structure to strip, unlike Maven's tarball.
+# -----------------------------------------------------------------------------
+RUN set -euo pipefail; \
+    . "${BAOBAB_CONFIG_DIR}/versions.lock"; \
+    ARCH=$(dpkg --print-architecture); \
+    if [ "$ARCH" = "amd64" ]; then \
+        TERRAFORM_ASSET="${TERRAFORM_ASSET_AMD64}"; \
+        TERRAFORM_SHA256="${TERRAFORM_SHA256_AMD64}"; \
+    else \
+        TERRAFORM_ASSET="${TERRAFORM_ASSET_ARM64}"; \
+        TERRAFORM_SHA256="${TERRAFORM_SHA256_ARM64}"; \
+    fi; \
+    curl -fsSL -o /tmp/terraform.zip \
+      "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/${TERRAFORM_ASSET}"; \
+    echo "${TERRAFORM_SHA256}  /tmp/terraform.zip" | sha256sum -c -; \
+    unzip -q /tmp/terraform.zip -d /usr/local/bin; \
+    chmod +x /usr/local/bin/terraform; \
+    rm -f /tmp/terraform.zip
+
+# -----------------------------------------------------------------------------
+# AWS CLI v2
+#
+# Verified via a detached PGP signature, NOT a checksum — AWS does not
+# publish a SHA256SUMS-style manifest for the CLI the way HashiCorp/GitHub
+# do (see versions.yaml's infra.aws_cli comment and config/resolve.sh). The
+# public key below is reproduced verbatim from AWS's own documentation
+# (docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html,
+# "Installing, updating, and uninstalling the AWS CLI version 2 on Linux" ->
+# GPG signature verification) — fingerprint FB5D B77F D5C1 18B8 0511 ADA8
+# A631 0ACC 4672 475C, confirmed against a live `gpg --verify` round trip
+# (good signature; a tampered-file negative control was correctly rejected)
+# in the same session this stage was authored (2026-09-03). gnupg is
+# already installed in the `base` stage (see section 1) — nothing extra to
+# apt-get here.
+#
+# Installer archives are AWS's own versioned-release URLs; config/resolve.sh
+# already confirmed both architectures' archives exist for AWS_CLI_VERSION
+# before this stage ever runs, so a bad pin fails at lockfile-generation
+# time, not here. `--update` is passed to the installer so a base-image
+# change that happens to already carry some AWS CLI build doesn't abort.
+# -----------------------------------------------------------------------------
+COPY <<'AWS_CLI_PUBLIC_KEY' /tmp/aws-cli-public-key.asc
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBF2Cr7UBEADJZHcgusOJl7ENSyumXh85z0TRV0xJorM2B/JL0kHOyigQluUG
+ZMLhENaG0bYatdrKP+3H91lvK050pXwnO/R7fB/FSTouki4ciIx5OuLlnJZIxSzx
+PqGl0mkxImLNbGWoi6Lto0LYxqHN2iQtzlwTVmq9733zd3XfcXrZ3+LblHAgEt5G
+TfNxEKJ8soPLyWmwDH6HWCnjZ/aIQRBTIQ05uVeEoYxSh6wOai7ss/KveoSNBbYz
+gbdzoqI2Y8cgH2nbfgp3DSasaLZEdCSsIsK1u05CinE7k2qZ7KgKAUIcT/cR/grk
+C6VwsnDU0OUCideXcQ8WeHutqvgZH1JgKDbznoIzeQHJD238GEu+eKhRHcz8/jeG
+94zkcgJOz3KbZGYMiTh277Fvj9zzvZsbMBCedV1BTg3TqgvdX4bdkhf5cH+7NtWO
+lrFj6UwAsGukBTAOxC0l/dnSmZhJ7Z1KmEWilro/gOrjtOxqRQutlIqG22TaqoPG
+fYVN+en3Zwbt97kcgZDwqbuykNt64oZWc4XKCa3mprEGC3IbJTBFqglXmZ7l9ywG
+EEUJYOlb2XrSuPWml39beWdKM8kzr1OjnlOm6+lpTRCBfo0wa9F8YZRhHPAkwKkX
+XDeOGpWRj4ohOx0d2GWkyV5xyN14p2tQOCdOODmz80yUTgRpPVQUtOEhXQARAQAB
+tCFBV1MgQ0xJIFRlYW0gPGF3cy1jbGlAYW1hem9uLmNvbT6JAlQEEwEIAD4CGwMF
+CwkIBwIGFQoJCAsCBBYCAwECHgECF4AWIQT7Xbd/1cEYuAURraimMQrMRnJHXAUC
+akV0ygUJDqP4lQAKCRCmMQrMRnJHXFHjD/9eyZLYcKuQOlLvtqSDtUBiEZf6ZZjM
+i3ygYH8rJNtuToUH+HvSpe819urJCquXhDrlK6N+aqW0hCLtNABJG/vsafIgvIYJ
+hSGgpgtNnQyMV1jViRWqPjbouw8OkYKBThUfT1i2Y+wn58ifs6ODBCmTexWtXspA
+Si+Gt49xDOW0APmbOPnI+a4HJW6tVEo6MWS0WjzpiBayR3d1A4pt4YrPfSdDgpLo
+h2SLQqlRqvvVZJaWBjhkErNFpfsBA06sDcPEOb0G8LBUbR4WOcdvhe5LubJbZuxC
+AG9kNPCVeQP1ixwjgjXKysaxeQ6rv0VzIQgRp6tLVLWhy6AKDNvLjFSsmXZ1Wl08
+Y/RlOHXlzLuQMRE6sR1wOdRxc9TsrNWTGiBK65cvSWOy03JeBkQQ8pesqltiyxI9
+U21kkgiXtTSKNGfKK8pO27D81YANhRqPK7iTp6kuFiY2WtOg90KTMNlIT+Ff85Y2
+b1rHj6Z0SrCkJujhWk3IBPic/wJgz01LEc/OAdUPlby90RJZcIBhSlWhT7mXnXIO
+c0HWlNQrns2s3CTyYwZSiSlYe9ApeLwhjDo8NhbFuCAy61l6O5UsR4AfZxx/rGKv
+2wFb1/RN/P4gNe6vmxZAPjR0AQcwD3tc2McimOLr/22kmPz8IH3I0X7WoSFr0Biz
+E91G7bb0hOb/cA==
+=knv7
+-----END PGP PUBLIC KEY BLOCK-----
+AWS_CLI_PUBLIC_KEY
+
+RUN set -euo pipefail; \
+    . "${BAOBAB_CONFIG_DIR}/versions.lock"; \
+    ARCH=$(dpkg --print-architecture); \
+    if [ "$ARCH" = "amd64" ]; then \
+        AWS_CLI_ASSET="${AWS_CLI_ASSET_AMD64}"; \
+    else \
+        AWS_CLI_ASSET="${AWS_CLI_ASSET_ARM64}"; \
+    fi; \
+    export GNUPGHOME="$(mktemp -d)"; \
+    gpg --import /tmp/aws-cli-public-key.asc; \
+    curl -fsSL -o /tmp/awscliv2.zip \
+      "https://awscli.amazonaws.com/${AWS_CLI_ASSET}"; \
+    curl -fsSL -o /tmp/awscliv2.zip.sig \
+      "https://awscli.amazonaws.com/${AWS_CLI_ASSET}.sig"; \
+    gpg --verify /tmp/awscliv2.zip.sig /tmp/awscliv2.zip; \
+    unzip -q /tmp/awscliv2.zip -d /tmp/awscli-install; \
+    /tmp/awscli-install/aws/install --update; \
+    rm -rf /tmp/awscliv2.zip /tmp/awscliv2.zip.sig /tmp/awscli-install \
+           /tmp/aws-cli-public-key.asc "${GNUPGHOME}"
+
+# -----------------------------------------------------------------------------
+# fzf, tmux, bash-completion, GitHub CLI + a SUBSET of cli-tools' checksummed
+# binaries — same source and verification as `frontend`'s equivalent block,
+# same exclusions (no `uv`/`uvx` — Python-only, this profile has no Python;
+# no `cosign` — image-signing, not an infra-repo need per capabilities.yaml).
+# -----------------------------------------------------------------------------
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends fzf tmux bash-completion
+
+COPY --from=cli-tools /opt/cli-tools/bin/rg   /usr/local/bin/rg
+COPY --from=cli-tools /opt/cli-tools/bin/fd   /usr/local/bin/fd
+COPY --from=cli-tools /opt/cli-tools/bin/bat  /usr/local/bin/bat
+COPY --from=cli-tools /opt/cli-tools/bin/eza  /usr/local/bin/eza
+COPY --from=cli-tools /opt/cli-tools/bin/task /usr/local/bin/task
+COPY --from=cli-tools /opt/cli-tools/bin/yq   /usr/local/bin/yq
+COPY --from=cli-tools /opt/cli-tools/bin/gh   /usr/local/bin/gh
+RUN chmod +x /usr/local/bin/rg /usr/local/bin/fd /usr/local/bin/bat \
+      /usr/local/bin/eza /usr/local/bin/task /usr/local/bin/yq /usr/local/bin/gh
+
+# Non-root user creation — byte-identical to `final`'s equivalent block.
+RUN if id "ubuntu" &>/dev/null; then userdel -r ubuntu; fi && \
+    if getent group ubuntu &>/dev/null; then groupdel ubuntu; fi && \
+    groupadd --gid 1000 vscode && \
+    useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home vscode && \
+    echo "vscode ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vscode && \
+    chmod 0440 /etc/sudoers.d/vscode && \
+    mkdir -p /workspaces /home/vscode/.local/bin && \
+    chown -R vscode:vscode /workspaces /home/vscode
+
+# Global environment — narrower than `final`: no Flutter/pub-cache paths, no
+# Python/Poetry-specific vars, no JAVA_HOME. BAOBAB_BUILD_PROFILE=infra is
+# the load-bearing addition that makes baobab-verify's profile gating (see
+# scripts/verify.sh) correct for this image — without it, baobab-verify
+# would default to "full" and fail on every Python/Flutter/Java/Postgres/
+# Node check this profile deliberately never installs.
+ENV PATH="/home/vscode/.local/bin:/usr/local/bin:${PATH}" \
+    BAOBAB_BUILD_PROFILE=infra \
+    BAOBAB_IMAGE_VERSION=${VERSION} \
+    BAOBAB_BUILD_DATE=${BUILD_DATE} \
+    BAOBAB_GIT_REVISION=${REVISION}
+
+# Shell completions — gh and docker (unlike `frontend`, which has neither
+# Docker CLI nor a completion for it). No Poetry completion — Poetry isn't
+# part of this profile.
+RUN mkdir -p /etc/bash_completion.d && \
+    gh completion -s bash > /etc/bash_completion.d/gh && \
+    docker completion bash > /etc/bash_completion.d/docker
+
+COPY --chown=vscode:vscode config/bashrc.d/ /etc/bashrc.d/
+RUN echo '\n# BAOBAB devcontainer shell enhancements\nfor f in /etc/bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done' \
+      >> /etc/bash.bashrc
+
+# Helper commands — byte-identical to `final`'s equivalent block. No Poetry
+# config line: Poetry isn't installed in this profile.
+COPY --chmod=0755 scripts/bootstrap.sh    /usr/local/bin/baobab-bootstrap
+COPY --chmod=0755 scripts/post-create.sh  /usr/local/bin/baobab-post-create
+COPY --chmod=0755 scripts/summary.sh      /usr/local/bin/baobab-summary
+COPY --chmod=0755 scripts/verify.sh       /usr/local/bin/baobab-verify
+
+USER vscode
+WORKDIR /workspaces
+
+# -----------------------------------------------------------------------------
+# Build-time verification — same rationale as `final`/`frontend` above: fail
+# the image build itself if the toolchain isn't in the state baobab-verify
+# expects, rather than shipping a broken image and discovering it later.
+# -----------------------------------------------------------------------------
+
+RUN baobab-verify
 
 HEALTHCHECK \
     --interval=60s \

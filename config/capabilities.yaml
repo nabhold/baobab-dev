@@ -84,6 +84,13 @@ capabilities:
       sharp: true
       lighthouse: true
 
+  infra:
+    development:
+      docker: true
+      github_cli: true
+      terraform: "1.16"
+      aws_cli: "2"
+
 # ------------------------------------------------------------------------------
 # Notes
 # ------------------------------------------------------------------------------
@@ -95,6 +102,16 @@ notes:
     migration, not by any other BAOBAB engine today. Deliberately not added
     to `frontend`/`frontend-e2e`: those profiles back frontend-only
     Dockerfile targets that never install a JDK or Maven in the first place.
+  - >
+    [2026-09-03] Added the `infra` profile (v1.4.0 target) — Terraform +
+    AWS CLI only, for nabhold/infrastructure's local development and
+    testing. Deliberately branches off no other profile (not `extends:
+    "full"` or `"frontend"`): it needs none of `full`'s languages/database/
+    security domains and none of `frontend`'s Node/pnpm/Turborepo domains.
+    `kubectl`/`helm` are deliberately NOT included — nabhold/infrastructure's
+    own README defers Kubernetes/Helm/Temporal "until operational need
+    justifies their additional machinery"; add them here only if that
+    decision changes, not preemptively.
   - >
     This is a hand-authored snapshot at the time of writing. It MUST be kept
     in sync with versions.yaml manually until a generation step exists. A CI

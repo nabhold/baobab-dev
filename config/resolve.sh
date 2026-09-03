@@ -261,6 +261,33 @@ maven_sha512_for_version() {
         tr -d '[:space:]'
 }
 
+# ------------------------------------------------------------------------------
+# HashiCorp Terraform checksum
+#
+# Terraform's distribution is a per-architecture zip (unlike Maven's single
+# architecture-independent tarball) — HashiCorp publishes ONE SHA256SUMS
+# manifest per release, covering every platform's asset in a single file,
+# rather than a per-asset sidecar the way Apache's .sha512 files or GitHub's
+# digest API work elsewhere in this file. This greps the one line matching
+# the requested asset filename out of that manifest and returns just the hex
+# digest, so the caller gets the same "one digest per asset" shape every
+# other checksum helper here already returns.
+#
+# Live-verified (2026-09-02/03) against releases.hashicorp.com/terraform/
+# 1.16.1/terraform_1.16.1_SHA256SUMS for both linux/amd64 and linux/arm64
+# assets.
+# ------------------------------------------------------------------------------
+
+terraform_sha256_for_asset() {
+
+    local version="$1"
+    local asset_name="$2"
+
+    curl -fsSL \
+        "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS" |
+        awk -v asset="$asset_name" '$2 == asset { print $1 }'
+}
+
 # npm-sourced tools (pnpm, turbo, playwright, sharp, lighthouse) have no
 # GitHub Releases API equivalent worth using here — they're versioned and
 # distributed via the npm registry itself, which publishes a canonical
@@ -593,6 +620,59 @@ MAVEN_SHA512=$(maven_sha512_for_version "${MAVEN_VERSION}")
 require_resolved "$MAVEN_SHA512" "Apache archive .sha512 lookup for Maven ${MAVEN_VERSION}"
 
 # ------------------------------------------------------------------------------
+# HashiCorp Terraform (infra.terraform)
+#
+# Explicit pin, not "latest" — see versions.yaml's infra.terraform comment.
+# Per-arch zip + SHA256SUMS-manifest lookup, the same asset+digest shape as
+# the GitHub-release tools above, just sourced from releases.hashicorp.com
+# instead of GitHub's API.
+# ------------------------------------------------------------------------------
+
+TERRAFORM_VERSION=$(yaml '.infra.terraform.version')
+require_resolved "$TERRAFORM_VERSION" "versions.yaml key '.infra.terraform.version'"
+
+info "Fetching Terraform checksums for ${TERRAFORM_VERSION}..."
+TERRAFORM_ASSET_AMD64="terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+TERRAFORM_SHA256_AMD64=$(terraform_sha256_for_asset "${TERRAFORM_VERSION}" "${TERRAFORM_ASSET_AMD64}")
+require_resolved "$TERRAFORM_SHA256_AMD64" "HashiCorp SHA256SUMS lookup for ${TERRAFORM_ASSET_AMD64}"
+
+TERRAFORM_ASSET_ARM64="terraform_${TERRAFORM_VERSION}_linux_arm64.zip"
+TERRAFORM_SHA256_ARM64=$(terraform_sha256_for_asset "${TERRAFORM_VERSION}" "${TERRAFORM_ASSET_ARM64}")
+require_resolved "$TERRAFORM_SHA256_ARM64" "HashiCorp SHA256SUMS lookup for ${TERRAFORM_ASSET_ARM64}"
+
+# ------------------------------------------------------------------------------
+# AWS CLI v2 (infra.aws_cli)
+#
+# Explicit pin, not "latest" — see versions.yaml's infra.aws_cli comment. No
+# checksum to fetch here: AWS does not publish a SHA256SUMS-style manifest
+# for the CLI, only a per-archive detached PGP signature, checked at Docker
+# build time (gpg --verify) against the AWS CLI Team's public key embedded
+# directly in the Dockerfile's infra stage — there is nothing this resolver
+# can usefully precompute the way it does for a checksum.
+#
+# What IS resolved here is confirming the pinned version's installer
+# archives actually exist at AWS's versioned-release URL pattern
+# (docs.aws.amazon.com/cli/latest/userguide/getting-started-version.html) —
+# the same "fail at lockfile-generation time, not three build stages later"
+# principle applied to every other tool in this file, just via an existence
+# check instead of a digest comparison, since there's no digest to compare.
+# ------------------------------------------------------------------------------
+
+AWS_CLI_VERSION=$(yaml '.infra.aws_cli.version')
+require_resolved "$AWS_CLI_VERSION" "versions.yaml key '.infra.aws_cli.version'"
+
+info "Confirming AWS CLI ${AWS_CLI_VERSION} installer archives exist..."
+AWS_CLI_ASSET_AMD64="awscli-exe-linux-x86_64-${AWS_CLI_VERSION}.zip"
+if ! curl -fsSL --head -o /dev/null "https://awscli.amazonaws.com/${AWS_CLI_ASSET_AMD64}"; then
+    die "AWS CLI installer not found at https://awscli.amazonaws.com/${AWS_CLI_ASSET_AMD64} — check infra.aws_cli.version in versions.yaml"
+fi
+
+AWS_CLI_ASSET_ARM64="awscli-exe-linux-aarch64-${AWS_CLI_VERSION}.zip"
+if ! curl -fsSL --head -o /dev/null "https://awscli.amazonaws.com/${AWS_CLI_ASSET_ARM64}"; then
+    die "AWS CLI installer not found at https://awscli.amazonaws.com/${AWS_CLI_ASSET_ARM64} — check infra.aws_cli.version in versions.yaml"
+fi
+
+# ------------------------------------------------------------------------------
 # NEW: frontend_tooling (turbo, playwright, sharp, lighthouse)
 #
 # Backs the `frontend`/`frontend-e2e` Dockerfile targets (ADR-0001,
@@ -709,6 +789,16 @@ export COSIGN_SHA256_ARM64=${COSIGN_SHA256_ARM64}
 
 export MAVEN_VERSION=${MAVEN_VERSION}
 export MAVEN_SHA512=${MAVEN_SHA512}
+
+export TERRAFORM_VERSION=${TERRAFORM_VERSION}
+export TERRAFORM_ASSET_AMD64=${TERRAFORM_ASSET_AMD64}
+export TERRAFORM_SHA256_AMD64=${TERRAFORM_SHA256_AMD64}
+export TERRAFORM_ASSET_ARM64=${TERRAFORM_ASSET_ARM64}
+export TERRAFORM_SHA256_ARM64=${TERRAFORM_SHA256_ARM64}
+
+export AWS_CLI_VERSION=${AWS_CLI_VERSION}
+export AWS_CLI_ASSET_AMD64=${AWS_CLI_ASSET_AMD64}
+export AWS_CLI_ASSET_ARM64=${AWS_CLI_ASSET_ARM64}
 
 export TURBO_VERSION=${TURBO_VERSION}
 export PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}

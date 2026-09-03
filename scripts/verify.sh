@@ -338,10 +338,20 @@ fi
 
 section "JavaScript"
 
-check_required "Node.js ${NODE_MAJOR}" node
-check_required "npm" npm
-check_required "pnpm" pnpm
-check_optional "Yarn" yarn
+# `infra` is the one profile that branches off `base` directly instead of
+# `with-node` (see the Dockerfile's `infra` stage comment) — every other
+# profile to date (full/frontend/frontend-e2e) descends from `with-node`
+# unconditionally, which is why this section previously had no gate at all.
+if [[ "$BAOBAB_BUILD_PROFILE" != "infra" ]]; then
+
+    check_required "Node.js ${NODE_MAJOR}" node
+    check_required "npm" npm
+    check_required "pnpm" pnpm
+    check_optional "Yarn" yarn
+
+else
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Node.js"
+fi
 
 ###############################################################################
 # Flutter
@@ -408,7 +418,10 @@ fi
 
 section "Containers"
 
-if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
+# `infra` added alongside `full` (2026-09-03) — it installs Docker CLI +
+# Compose plugin too (nabhold/infrastructure's own compose stack), matching
+# capabilities.yaml's `development.docker: true` under both profiles.
+if [[ "$BAOBAB_BUILD_PROFILE" == "full" || "$BAOBAB_BUILD_PROFILE" == "infra" ]]; then
 
     check_required "Docker CLI" docker
 
@@ -430,10 +443,29 @@ if [[ "$BAOBAB_BUILD_PROFILE" == "full" ]]; then
 
 else
     # ASSUMPTION: neither frontend nor frontend-e2e includes Docker CLI —
-    # matches capabilities.yaml, which only lists `docker` under `full`.
-    # Revisit if a digital-estate repo later needs local containerized
-    # services (e.g. a local mock backend).
+    # matches capabilities.yaml, which only lists `docker` under `full`/
+    # `infra`. Revisit if a digital-estate repo later needs local
+    # containerized services (e.g. a local mock backend).
     say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Docker CLI"
+fi
+
+###############################################################################
+# Infrastructure
+###############################################################################
+
+section "Infrastructure"
+
+# Needed only for nabhold/infrastructure's Terraform-managed AWS
+# infrastructure — not by any other BAOBAB repo today. Matches
+# capabilities.yaml, which only lists `development.terraform`/`aws_cli`
+# under `infra`.
+if [[ "$BAOBAB_BUILD_PROFILE" == "infra" ]]; then
+
+    check_required "Terraform" terraform "terraform version"
+    check_required "AWS CLI" aws "aws --version"
+
+else
+    say "  Skipped — profile '${BAOBAB_BUILD_PROFILE}' does not include Terraform/AWS CLI"
 fi
 
 ###############################################################################

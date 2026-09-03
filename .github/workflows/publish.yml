@@ -335,16 +335,17 @@ jobs:
       packages: write
 
     # TIER 1 (baobab-dev-v1_1_0-release-plan-amended.md tasks 1.9/1.10;
-    # ADR-0001): build and Trivy-scan all three Dockerfile targets on every
-    # trigger, exactly as `final` already was. Publishing (real GHCR tags,
-    # cosign signing, SLSA provenance, SBOM attestation, Rekor) stays
-    # `final`-only for now — extending that machinery to the two new
-    # targets is TIER 2, deliberately deferred until Tier 1 has proven both
-    # new stages build cleanly and shown their real Trivy/SBOM profile.
-    # This DOES triple this job's CI minutes on every PR/push (3 targets ×
-    # 2 platforms instead of 1 × 2) — an accepted, disclosed cost of
-    # validating both new stages continuously rather than only at publish
-    # time.
+    # ADR-0001): build and Trivy-scan every Dockerfile target on every
+    # trigger, exactly as `final` already was. `infra` (2026-09-03,
+    # nabhold/infrastructure local development + testing proposal) joined
+    # the matrix directly at TIER 2 — publishing for real from day one —
+    # rather than repeating a separate build-only proving period, since its
+    # stage reuses patterns (checksummed binary install, profile-gated
+    # verify.sh, leaf stage off `base`) already validated by `frontend`'s
+    # own Tier 1 -> Tier 2 rollout.
+    # This runs 4 targets × 2 platforms on every PR/push — an accepted,
+    # disclosed cost of validating every stage continuously rather than
+    # only at publish time.
     strategy:
       fail-fast: false
       matrix:
@@ -352,6 +353,7 @@ jobs:
           - final
           - frontend
           - frontend-e2e
+          - infra
         platform:
           - linux/amd64
           - linux/arm64
@@ -628,17 +630,19 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
             baobab-verify
 
-      # Container Smoke Test (frontend / frontend-e2e — local scan image)
+      # Container Smoke Test (every non-final target — local scan image)
       # Runs against the already-`load: true`-ed local `baobab-dev:scan`
       # image rather than the registry digest, so it needs no tag gating
       # and no registry auth — cheap enough to run on every PR/push, not
       # just at publish time. `final` gets an additional registry-digest
-      # smoke test above since that path already existed; frontend and
-      # frontend-e2e now also push for real (Tier 2) but don't yet have an
-      # equivalent registry-digest smoke test of their own — this local
-      # check still validates FUNCTIONAL correctness (BAOBAB_BUILD_PROFILE
-      # gating, right tools present), just not the exact bytes GHCR served.
-      - name: Execute container smoke test (frontend / frontend-e2e)
+      # smoke test above since that path already existed; frontend,
+      # frontend-e2e, and (2026-09-03) infra all push for real too but
+      # don't have an equivalent registry-digest smoke test of their own —
+      # this local check still validates FUNCTIONAL correctness
+      # (BAOBAB_BUILD_PROFILE gating, right tools present), just not the
+      # exact bytes GHCR served. Genuinely target-agnostic (`!= 'final'`,
+      # not an enumerated list) — a future target needs no change here.
+      - name: Execute container smoke test (non-final targets)
         if: matrix.target != 'final' && matrix.platform == 'linux/amd64'
         run: |
           docker run --rm baobab-dev:scan baobab-verify
@@ -658,7 +662,13 @@ jobs:
     # TIER 2 (baobab-dev-v1_1_0-release-plan-amended.md; ADR-0001): matrix
     # over target instead of a single final-only run. All three targets
     # publish now — final+frontend proved this split on tag v1.1.0;
-    # frontend-e2e completes it in this pass. GitHub Release creation was
+    # frontend-e2e completes it in this pass. `infra` joins the matrix
+    # 2026-09-03 (nabhold/infrastructure local development + testing
+    # proposal) — no other change needed in this job: the tag-suffix logic
+    # in "Extract Docker tagging metadata" below and the "Container Smoke
+    # Test (frontend / frontend-e2e — local scan image)" step in the build
+    # job above are both already written generically for "any non-final
+    # target", not enumerated per target. GitHub Release creation was
     # REMOVED from this job entirely and moved to a new `release` job
     # below: with matrix legs running in parallel, each independently
     # creating/publishing "the" release for this tag would race — multiple
@@ -673,6 +683,7 @@ jobs:
           - final
           - frontend
           - frontend-e2e
+          - infra
 
     # contents: write REMOVED — this job no longer creates the GitHub
     # Release (see note above). packages: write — publish the multi-arch
